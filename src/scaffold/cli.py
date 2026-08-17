@@ -141,9 +141,5 @@ def main(args=None) -> int:
     return 0
 
 
-
-entry_point_args = None  # allow test harness to override sys.argv
-
-
 if __name__ == "__main__":
-    sys.exit(main(entry_point_args))
+    sys.exit(main())
