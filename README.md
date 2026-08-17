@@ -13,7 +13,7 @@ Each overlay references shared base resources in `cluster-templates/` via relati
 
 ## Requirements
 
-- Python 3.14+
+- Python 3.11+
 - [kustomize](https://kubectl.docs.kubernetes.io/installation/kustomize/) (for post-scaffold validation; optional with `--skip-validation`)
 
 ## Installation
@@ -52,19 +52,12 @@ This creates `./my-cluster/` with the full Kustomize overlay structure and valid
 | `--image-set`              | `img4.21.13-x86-64-appsub`  | OpenShift image set reference              |
 | `--zones`                  | `<region>a,b,c`              | Comma-separated availability zone list     |
 | `--base-path`              | `.`                          | Parent directory for the cluster overlay    |
-| `--profile`                | (none)                       | AWS profile preset (maps to worker type)   |
-| `--base-domain`            | (none)                       | Cluster base DNS domain override           |
+| `--profile`                | `aws/standard`               | Template profile directory (e.g. `aws/standard`, `aws-ha`) |
+| `--base-domain`            | `openshiftpartnerlabs.com`   | Cluster base DNS domain override           |
+| `--htpasswd-provider-name` | (none)                       | Display name for the htpasswd identity provider |
 | `--cluster-templates-dir`  | `cluster-templates`          | Path to shared cluster templates           |
+| `--force`                  | `false`                      | Overwrite existing cluster directory       |
 | `--skip-validation`        | `false`                      | Skip `kustomize build` validation          |
-
-### AWS profile presets
-
-The `--profile` flag maps to predefined worker instance types:
-
-| Profile     | Worker type   |
-|-------------|---------------|
-| `aws-ha`    | `m7i.2xlarge` |
-| `aws-small` | `m5.large`    |
 
 ### Example: custom cluster
 
@@ -111,12 +104,10 @@ The `cluster-templates/` directory contains shared base resources organized by c
 ```
 cluster-templates/
   aws/          # compact, sno, standard
-  aws-ha/       # base (HA configuration)
-  azure/        # compact, sno, standard
-  gcp/          # compact, sno, standard
+  aws-ha/       # HA configuration
 ```
 
-Generated overlays reference these bases via relative paths in their `kustomization.yaml` files.
+Only AWS profiles are currently supported. Generated overlays reference these bases via relative paths in their `kustomization.yaml` files.
 
 ## Development
 
