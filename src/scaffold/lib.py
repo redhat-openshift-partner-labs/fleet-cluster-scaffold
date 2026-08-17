@@ -12,6 +12,17 @@ from dataclasses import dataclass
 
 import yaml
 
+
+class _LiteralStr(str):
+    """Marker subclass so yaml.dump uses literal block scalar style (|)."""
+
+
+def _literal_str_representer(dumper, data):
+    return dumper.represent_scalar("tag:yaml.org,2002:str", data, style="|")
+
+
+yaml.add_representer(_LiteralStr, _literal_str_representer)
+
 _DNS_LABEL_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
 
 
@@ -226,8 +237,8 @@ def generate_hive_patches(params: ClusterParams, hive_base_path: str = "../base/
             },
             "type": "Opaque",
             "stringData": {
-                "install-config.yaml": yaml.dump(
-                    install_config, default_flow_style=False, sort_keys=False
+                "install-config.yaml": _LiteralStr(
+                    yaml.dump(install_config, default_flow_style=False, sort_keys=False)
                 )
             },
         },

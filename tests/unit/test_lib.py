@@ -156,6 +156,11 @@ class TestGenerateHivePatches:
         type_ops = [op for op in mp if op["path"] == "/spec/platform/aws/type"]
         assert type_ops[0]["value"] == "m7i.2xlarge"
 
+    def test_install_config_uses_block_scalar(self, params):
+        patches = generate_hive_patches(params)
+        raw = patches["patches/install-config.yaml"]
+        assert "install-config.yaml: |" in raw
+
     def test_namespace_patch(self, params):
         patches = generate_hive_patches(params)
         ns = yaml.safe_load(patches["patches/namespace.yaml"])
