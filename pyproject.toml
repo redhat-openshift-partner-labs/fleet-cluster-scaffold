@@ -1,0 +1,38 @@
+[project]
+name = "fleet-cluster-scaffold"
+version = "0.1.0"
+description = "Standalone cluster scaffolding tool — generate OpenShift cluster overlays with Kustomize without the fleet monorepo dependency."
+requires-python = ">=3.14"
+dependencies = [
+    "pyyaml >=6.0",
+    "pip (>=26.2.1,<27.0.0)",
+]
+
+[project.scripts]
+fleet-scaffold-cluster = "scaffold.cli:main"
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+# Pylint messages control — parity with fleet repo
+[tool.pylint.messages_control]
+disable = [
+    "missing-function-docstring",
+    "subprocess-run-check",
+    "duplicate-code",
+    "global-statement",
+    "f-string-without-interpolation",
+    "line-too-long",
+    "too-many-locals",
+    "too-many-statements",
+    "missing-class-docstring",
+    "too-many-instance-attributes",
+]
+
+# Bandit skip rules — parity with fleet repo
+[tool.bandit]
+skips = ["B404", "B603", "B607"]
