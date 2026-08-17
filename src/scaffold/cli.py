@@ -5,6 +5,8 @@ Generates clusters/<name>/ with all Kustomize patches pre-populated.
 Validates output with kustomize build. Exits 1 on validation failure.
 """
 
+from __future__ import annotations
+
 import argparse
 import logging
 import os.path
