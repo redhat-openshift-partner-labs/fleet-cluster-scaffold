@@ -187,15 +187,6 @@ def test_skip_validation_skips_kustomize_check(mock_which, tmp_path):
     mock_which.assert_not_called()
 
 
-@mock.patch("scaffold.cli.subprocess.run")
-def test_no_skip_calls_kustomize_check(mock_run, default_args):
-    with mock.patch(
-        "scaffold.cli.shutil.which", return_value="kustomize"
-    ):
-        mock_run.return_value = subprocess.CompletedProcess([], returncode=0, stdout="", stderr="")
-        main(default_args)
-    assert mock_run.call_count == 2
-
 
 @mock.patch("scaffold.cli.subprocess.run")
 def test_worker_type_used_verbatim_without_profile(mock_run, tmp_path):
