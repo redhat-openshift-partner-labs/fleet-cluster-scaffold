@@ -11,6 +11,7 @@ from scaffold.lib import (
     generate_metadata,
     get_default_zones,
     validate_cluster_name,
+    validate_profile,
     write_cluster_dir,
 )
 
@@ -485,3 +486,46 @@ class TestValidateClusterName:
     def test_rejects_too_long(self):
         with pytest.raises(ValueError, match="63"):
             validate_cluster_name("a" * 64)
+
+
+# ===================== validate_profile tests =====================
+
+
+class TestValidateProfile:
+    def test_accepts_aws_standard(self, tmp_path):
+        tpl = tmp_path / "cluster-templates" / "aws" / "standard" / "hive"
+        tpl.mkdir(parents=True)
+        validate_profile("aws/standard", str(tmp_path / "cluster-templates"))
+
+    def test_accepts_aws_compact(self, tmp_path):
+        tpl = tmp_path / "cluster-templates" / "aws" / "compact" / "hive"
+        tpl.mkdir(parents=True)
+        validate_profile("aws/compact", str(tmp_path / "cluster-templates"))
+
+    def test_accepts_aws_sno(self, tmp_path):
+        tpl = tmp_path / "cluster-templates" / "aws" / "sno" / "hive"
+        tpl.mkdir(parents=True)
+        validate_profile("aws/sno", str(tmp_path / "cluster-templates"))
+
+    def test_accepts_aws_ha(self, tmp_path):
+        tpl = tmp_path / "cluster-templates" / "aws-ha" / "hive"
+        tpl.mkdir(parents=True)
+        validate_profile("aws-ha", str(tmp_path / "cluster-templates"))
+
+    def test_rejects_azure(self, tmp_path):
+        tpl = tmp_path / "cluster-templates" / "azure" / "standard" / "hive"
+        tpl.mkdir(parents=True)
+        with pytest.raises(ValueError, match="not supported"):
+            validate_profile("azure/standard", str(tmp_path / "cluster-templates"))
+
+    def test_rejects_gcp(self, tmp_path):
+        tpl = tmp_path / "cluster-templates" / "gcp" / "compact" / "hive"
+        tpl.mkdir(parents=True)
+        with pytest.raises(ValueError, match="not supported"):
+            validate_profile("gcp/compact", str(tmp_path / "cluster-templates"))
+
+    def test_rejects_nonexistent_profile(self, tmp_path):
+        tpl = tmp_path / "cluster-templates"
+        tpl.mkdir()
+        with pytest.raises(ValueError, match="not found"):
+            validate_profile("aws/nonexistent", str(tpl))

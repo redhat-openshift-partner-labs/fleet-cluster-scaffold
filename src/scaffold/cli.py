@@ -14,7 +14,7 @@ import shutil
 import subprocess
 import sys
 
-from scaffold.lib import ClusterParams, validate_cluster_name, write_cluster_dir
+from scaffold.lib import ClusterParams, validate_cluster_name, validate_profile, write_cluster_dir
 
 _LOG = logging.getLogger("scaffold")
 
@@ -125,6 +125,13 @@ def main(args=None) -> int:
         kwargs["profile"] = parsed.profile
     try:
         validate_cluster_name(parsed.name)
+    except ValueError as exc:
+        _LOG.error("%s", exc)
+        return 1
+
+    profile = parsed.profile or "aws/standard"
+    try:
+        validate_profile(profile, parsed.cluster_templates_dir)
     except ValueError as exc:
         _LOG.error("%s", exc)
         return 1

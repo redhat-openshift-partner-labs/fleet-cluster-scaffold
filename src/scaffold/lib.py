@@ -34,6 +34,23 @@ def validate_cluster_name(name: str) -> None:
         )
 
 
+def validate_profile(profile: str, cluster_templates_dir: str) -> None:
+    """Validate that *profile* is a supported AWS profile and its template directory exists.
+
+    Raises ValueError if the profile is not AWS-based or the directory is missing.
+    """
+    if not (profile.startswith("aws") ):
+        raise ValueError(
+            f"Profile {profile!r} is not supported. "
+            "Only AWS profiles (aws/*,  aws-ha) are currently supported."
+        )
+    tpl_dir = os.path.join(cluster_templates_dir, profile)
+    if not os.path.isdir(tpl_dir):
+        raise ValueError(
+            f"Template directory for profile {profile!r} not found at {tpl_dir}."
+        )
+
+
 @dataclass
 class ClusterParams:
     name: str
