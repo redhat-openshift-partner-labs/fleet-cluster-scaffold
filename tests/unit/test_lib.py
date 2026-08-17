@@ -8,27 +8,10 @@ from scaffold.lib import (
     _resolve_base_resource_path,
     generate_crossplane_patches,
     generate_hive_patches,
+    generate_metadata,
     get_default_zones,
     write_cluster_dir,
 )
-
-
-@pytest.fixture()
-def params():
-    return ClusterParams(
-        name="my-cluster",
-        region="us-east-2",
-        tier="virt",
-        environment="development",
-        base_domain="openshiftpartnerlabs.com",
-        profile="aws-ha",
-        control_plane_type="m7i.4xlarge",
-        worker_type="m7i.2xlarge",
-        control_plane_replicas=3,
-        worker_replicas=3,
-        image_set="img4.21.13-x86-64-appsub",
-        zones=["us-east-2a", "us-east-2b", "us-east-2c"],
-    )
 
 
 # ===================== get_default_zones tests =====================
@@ -384,6 +367,45 @@ class TestResolveBaseResourcePath:
             str(clusters_dir / "my-cluster"), "crossplane", str(tpl_dir), "gcp/standard"
         )
         assert "gcp/standard/base/crossplane" in result
+
+
+# ===================== generate_metadata tests =====================
+
+
+class TestGenerateMetadata:
+    def test_empty_when_no_htpasswd(self):
+        params = ClusterParams(name="m", region="us-east-1", tier="base")
+        result = yaml.safe_load(generate_metadata(params))
+        assert result == {}
+
+    def test_includes_htpasswd_when_set(self):
+        params = ClusterParams(
+            name="m", region="us-east-1", tier="base",
+            htpasswd_provider_name="Acme Corp",
+        )
+        result = yaml.safe_load(generate_metadata(params))
+        assert result["htpasswd-provider-name"] == "Acme Corp"
+
+
+class TestWriteClusterDirMetadata:
+    def test_metadata_file_exists(self, params, tmp_path):
+        tpl_dir = tmp_path / "cluster-templates"
+        tpl_dir.mkdir()
+        write_cluster_dir(str(tmp_path), params, str(tpl_dir))
+        assert (tmp_path / "my-cluster" / "metadata.yaml").exists()
+
+    def test_metadata_contains_htpasswd(self, tmp_path):
+        tpl_dir = tmp_path / "cluster-templates"
+        tpl_dir.mkdir()
+        p = ClusterParams(
+            name="meta-test", region="us-east-1", tier="base",
+            htpasswd_provider_name="TestCo",
+        )
+        write_cluster_dir(str(tmp_path), p, str(tpl_dir))
+        meta = yaml.safe_load(
+            (tmp_path / "meta-test" / "metadata.yaml").read_text()
+        )
+        assert meta["htpasswd-provider-name"] == "TestCo"
 
 
 # ===================== ClusterParams tests =====================

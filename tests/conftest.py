@@ -12,6 +12,8 @@ def params():
         region="us-east-2",
         tier="virt",
         environment="development",
+        base_domain="openshiftpartnerlabs.com",
+        profile="aws-ha",
         control_plane_type="m7i.4xlarge",
         worker_type="m7i.2xlarge",
         control_plane_replicas=3,
