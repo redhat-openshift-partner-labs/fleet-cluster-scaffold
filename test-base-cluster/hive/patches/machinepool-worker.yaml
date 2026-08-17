@@ -1,0 +1,21 @@
+- op: replace
+  path: /metadata/name
+  value: test-base-cluster-worker
+- op: replace
+  path: /metadata/namespace
+  value: test-base-cluster
+- op: replace
+  path: /spec/clusterDeploymentRef/name
+  value: test-base-cluster
+- op: replace
+  path: /spec/platform/aws/type
+  value: null
+- op: replace
+  path: /spec/platform/aws/zones
+  value:
+  - us-east-2a
+  - us-east-2b
+  - us-east-2c
+- op: replace
+  path: /spec/replicas
+  value: 3

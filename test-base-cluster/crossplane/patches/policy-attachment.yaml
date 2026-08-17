@@ -1,0 +1,12 @@
+- op: replace
+  path: /metadata/name
+  value: test-base-cluster-policy-attachment
+- op: replace
+  path: /metadata/namespace
+  value: test-base-cluster
+- op: replace
+  path: /spec/forProvider/policyArnRef/name
+  value: test-base-cluster-openshift4installerpolicy
+- op: replace
+  path: /spec/forProvider/userRef/name
+  value: test-base-cluster-ocp-installer

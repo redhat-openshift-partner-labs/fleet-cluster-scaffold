@@ -1,0 +1,13 @@
+apiVersion: authorization.azure.upbound.io/v1beta1
+kind: RoleAssignment
+metadata:
+  name: cluster-placeholder-role-assignment
+  namespace: cluster-placeholder
+spec:
+  forProvider:
+    roleDefinitionName: Contributor
+    principalIdRef:
+      name: cluster-placeholder-ocp-installer
+    scope: /subscriptions/subscription-placeholder
+  providerConfigRef:
+    name: default

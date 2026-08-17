@@ -1,0 +1,12 @@
+apiVersion: cloudplatform.gcp.upbound.io/v1beta1
+kind: ProjectIAMMember
+metadata:
+  name: cluster-placeholder-iam-editor
+  namespace: cluster-placeholder
+spec:
+  forProvider:
+    role: roles/editor
+    memberRef:
+      name: cluster-placeholder-ocp-installer
+  providerConfigRef:
+    name: default

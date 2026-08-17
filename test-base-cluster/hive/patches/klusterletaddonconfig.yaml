@@ -1,0 +1,12 @@
+- op: replace
+  path: /metadata/name
+  value: test-base-cluster
+- op: replace
+  path: /metadata/namespace
+  value: test-base-cluster
+- op: replace
+  path: /spec/clusterName
+  value: test-base-cluster
+- op: replace
+  path: /spec/clusterNamespace
+  value: test-base-cluster

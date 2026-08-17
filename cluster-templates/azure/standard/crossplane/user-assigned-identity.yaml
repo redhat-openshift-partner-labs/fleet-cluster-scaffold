@@ -1,0 +1,16 @@
+apiVersion: managedidentity.azure.upbound.io/v1beta1
+kind: UserAssignedIdentity
+metadata:
+  name: cluster-placeholder-ocp-installer
+  namespace: cluster-placeholder
+spec:
+  forProvider:
+    location: eastus
+    resourceGroupNameRef:
+      name: cluster-placeholder
+    tags:
+      Purpose: OpenShift-Installer
+      CreatedBy: Crossplane
+      Product: OpenShift
+  providerConfigRef:
+    name: default

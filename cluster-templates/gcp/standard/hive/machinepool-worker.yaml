@@ -1,0 +1,19 @@
+apiVersion: hive.openshift.io/v1
+kind: MachinePool
+metadata:
+  name: cluster-placeholder-worker
+  namespace: cluster-placeholder
+spec:
+  clusterDeploymentRef:
+    name: cluster-placeholder
+  name: worker
+  platform:
+    gcp:
+      type: n2-standard-8
+      zones:
+        - us-central1-a
+        - us-central1-b
+        - us-central1-c
+  replicas: 3
+  labels:
+    node-role.kubernetes.io/worker: ""
