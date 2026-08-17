@@ -287,5 +287,55 @@ def test_rejects_invalid_cluster_name(tmp_path):
     assert result == 1
 
 
+# ======== Overwrite protection tests ========
+
+
+def test_refuses_overwrite_when_dir_exists(tmp_path):
+    tpl_dir = tmp_path / "cluster-templates"
+    tpl_dir.mkdir()
+    (tmp_path / "existing").mkdir()
+    result = main([
+        "--name", "existing",
+        "--region", "us-east-1",
+        "--tier", "base",
+        "--base-path", str(tmp_path),
+        "--cluster-templates-dir", str(tpl_dir),
+        "--skip-validation",
+    ])
+    assert result == 1
+
+
+def test_force_allows_overwrite(tmp_path):
+    tpl_dir = tmp_path / "cluster-templates"
+    tpl_dir.mkdir()
+    (tmp_path / "existing").mkdir()
+    result = main([
+        "--name", "existing",
+        "--region", "us-east-1",
+        "--tier", "base",
+        "--base-path", str(tmp_path),
+        "--cluster-templates-dir", str(tpl_dir),
+        "--skip-validation",
+        "--force",
+    ])
+    assert result == 0
+    assert (tmp_path / "existing" / "kustomization.yaml").exists()
+
+
+def test_fresh_directory_without_force(tmp_path):
+    tpl_dir = tmp_path / "cluster-templates"
+    tpl_dir.mkdir()
+    result = main([
+        "--name", "fresh",
+        "--region", "us-east-1",
+        "--tier", "base",
+        "--base-path", str(tmp_path),
+        "--cluster-templates-dir", str(tpl_dir),
+        "--skip-validation",
+    ])
+    assert result == 0
+    assert (tmp_path / "fresh" / "kustomization.yaml").exists()
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

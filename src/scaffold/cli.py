@@ -86,6 +86,14 @@ def main(args=None) -> int:
         help="Path to the shared cluster-templates directory",
     )
 
+    # Overwrite protection
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        default=False,
+        help="Overwrite existing cluster directory if it exists.",
+    )
+
     # Kustomize validation
     parser.add_argument(
         "--skip-validation",
@@ -119,6 +127,13 @@ def main(args=None) -> int:
         validate_cluster_name(parsed.name)
     except ValueError as exc:
         _LOG.error("%s", exc)
+        return 1
+
+    cluster_dir = os.path.join(parsed.base_path, parsed.name)
+    if os.path.exists(cluster_dir) and not parsed.force:
+        _LOG.error(
+            "Directory %s already exists. Use --force to overwrite.", cluster_dir
+        )
         return 1
 
     params = ClusterParams(**kwargs)
