@@ -53,7 +53,7 @@ def validate_profile(profile: str, cluster_templates_dir: str) -> None:
     if not (profile.startswith("aws") ):
         raise ValueError(
             f"Profile {profile!r} is not supported. "
-            "Only AWS profiles (aws/*,  aws-ha) are currently supported."
+            "Only AWS profiles (aws/*) are currently supported."
         )
     tpl_dir = os.path.join(cluster_templates_dir, profile)
     if not os.path.isdir(tpl_dir):

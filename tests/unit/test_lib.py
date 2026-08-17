@@ -57,9 +57,9 @@ class TestGenerateHivePatches:
         assert kust["namespace"] == "my-cluster"
 
     def test_kustomization_uses_custom_base_path(self, params):
-        patches = generate_hive_patches(params, hive_base_path="../../../cluster-templates/aws-ha/base/hive")
+        patches = generate_hive_patches(params, hive_base_path="../../../cluster-templates/aws/standard/hive")
         kust = yaml.safe_load(patches["kustomization.yaml"])
-        assert kust["resources"] == ["../../../cluster-templates/aws-ha/base/hive"]
+        assert kust["resources"] == ["../../../cluster-templates/aws/standard/hive"]
 
     def test_kustomization_default_base_path(self, params):
         patches = generate_hive_patches(params)
@@ -199,9 +199,9 @@ class TestGenerateCrossplanePatches:
         assert kust["namespace"] == "my-cluster"
 
     def test_kustomization_uses_custom_base_path(self, params):
-        patches = generate_crossplane_patches(params, crossplane_base_path="../../../cluster-templates/aws-ha/base/crossplane")
+        patches = generate_crossplane_patches(params, crossplane_base_path="../../../cluster-templates/aws/standard/crossplane")
         kust = yaml.safe_load(patches["kustomization.yaml"])
-        assert kust["resources"] == ["../../../cluster-templates/aws-ha/base/crossplane"]
+        assert kust["resources"] == ["../../../cluster-templates/aws/standard/crossplane"]
 
     def test_kustomization_default_base_path(self, params):
         patches = generate_crossplane_patches(params)
@@ -343,7 +343,7 @@ class TestWriteClusterDir:
             region="us-east-1",
             tier="virt",
             base_domain=custom_domain,
-            profile="aws-ha",
+            profile="aws/standard",
         )
         patches = generate_hive_patches(params)
         ic = yaml.safe_load(patches["patches/install-config.yaml"])
@@ -512,10 +512,10 @@ class TestValidateProfile:
         tpl.mkdir(parents=True)
         validate_profile("aws/sno", str(tmp_path / "cluster-templates"))
 
-    def test_accepts_aws_ha(self, tmp_path):
-        tpl = tmp_path / "cluster-templates" / "aws-ha" / "hive"
+    def test_accepts_aws_standard_default(self, tmp_path):
+        tpl = tmp_path / "cluster-templates" / "aws" / "standard" / "hive"
         tpl.mkdir(parents=True)
-        validate_profile("aws-ha", str(tmp_path / "cluster-templates"))
+        validate_profile("aws/standard", str(tmp_path / "cluster-templates"))
 
     def test_rejects_azure(self, tmp_path):
         tpl = tmp_path / "cluster-templates" / "azure" / "standard" / "hive"
