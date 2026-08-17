@@ -13,7 +13,7 @@ def params():
         tier="virt",
         environment="development",
         base_domain="openshiftpartnerlabs.com",
-        profile="aws-ha",
+        profile="aws/standard",
         control_plane_type="m7i.4xlarge",
         worker_type="m7i.2xlarge",
         control_plane_replicas=3,

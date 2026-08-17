@@ -22,7 +22,7 @@ def default_args(tmp_path):
         "--environment",
         "development",
         "--profile",
-        "aws-ha",
+        "aws/standard",
         "--base-path",
         str(tmp_path),
         "--cluster-templates-dir",
@@ -51,7 +51,7 @@ def test_scaffold_writes_and_validates(mock_run, mock_which, tmp_path):
         "--environment",
         "development",
         "--profile",
-        "aws-ha",
+        "aws/standard",
         "--base-path",
         str(tmp_path),
         "--cluster-templates-dir",
@@ -83,7 +83,7 @@ def test_scaffold_fails_on_invalid_kustomize(mock_run, mock_which, tmp_path):
         "--environment",
         "development",
         "--profile",
-        "aws-ha",
+        "aws/standard",
         "--base-path",
         str(tmp_path),
         "--cluster-templates-dir",
@@ -113,7 +113,7 @@ def test_scaffold_with_custom_zones(mock_run, mock_which, tmp_path):
         "--environment",
         "production",
         "--profile",
-        "aws-ha",
+        "aws/standard",
         "--base-path",
         str(tmp_path),
         "--cluster-templates-dir",
@@ -140,7 +140,7 @@ def test_shows_kustomize_missing_error(mock_which, tmp_path):
         "--environment",
         "development",
         "--profile",
-        "aws-ha",
+        "aws/standard",
         "--base-path",
         str(tmp_path),
         "--cluster-templates-dir",
@@ -176,7 +176,7 @@ def test_skip_validation_skips_kustomize_check(mock_which, tmp_path):
         "--region", "r",
         "--tier", "base",
         "--environment", "dev",
-        "--profile", "aws-ha",
+        "--profile", "aws/standard",
         "--base-path", str(tmp_path),
         "--cluster-templates-dir", str(tpl_dir),
         "--skip-validation",
@@ -215,7 +215,7 @@ def test_worker_type_used_even_with_profile(mock_run, tmp_path):
             "--region", "us-east-1",
             "--tier", "base",
             "--worker-type", "r6i.xlarge",
-            "--profile", "aws-ha",
+            "--profile", "aws/standard",
             "--base-path", str(tmp_path),
             "--cluster-templates-dir", str(tpl_dir),
         ])
@@ -270,7 +270,7 @@ def test_profile_forwarded_to_kustomization_resource(tmp_path):
         "--skip-validation",
     ])
     kust = yaml.safe_load((tmp_path / "pf" / "hive" / "kustomization.yaml").read_text())
-    assert "aws/standard/base/hive" in kust["resources"][0]
+    assert "aws/standard/hive" in kust["resources"][0]
 
 
 if __name__ == "__main__":

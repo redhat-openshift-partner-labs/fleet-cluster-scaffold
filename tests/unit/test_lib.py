@@ -301,7 +301,7 @@ class TestWriteClusterDir:
         )
         resource = kust["resources"][0]
         assert "cluster-templates" in resource
-        assert "aws-ha/base/hive" in resource
+        assert "aws/standard/hive" in resource
 
     def test_crossplane_kustomization_references_cluster_templates(self, params, tmp_path):
         tpl_dir = tmp_path / "cluster-templates"
@@ -313,7 +313,7 @@ class TestWriteClusterDir:
         )
         resource = kust["resources"][0]
         assert "cluster-templates" in resource
-        assert "aws-ha/base/crossplane" in resource
+        assert "aws/standard/crossplane" in resource
 
     def test_profile_param_flows_through(self, tmp_path):
         tpl_dir = tmp_path / "cluster-templates"
@@ -322,7 +322,7 @@ class TestWriteClusterDir:
             name="param-test",
             region="us-west-1",
             tier="test",
-            profile="aws-ha",
+            profile="aws/standard",
         )
         write_cluster_dir(str(tmp_path), params, str(tpl_dir))
         cluster_dir = tmp_path / "param-test"
@@ -354,9 +354,9 @@ class TestResolveBaseResourcePath:
         clusters_dir.mkdir()
         tpl_dir.mkdir()
         result = _resolve_base_resource_path(
-            str(clusters_dir / "my-cluster"), "hive", str(tpl_dir), "aws-ha"
+            str(clusters_dir / "my-cluster"), "hive", str(tpl_dir), "aws/standard"
         )
-        assert result == os.path.join("..", "..", "..", "cluster-templates", "aws-ha", "base", "hive")
+        assert result == os.path.join("..", "..", "..", "cluster-templates", "aws", "standard", "hive")
 
     def test_different_profile(self, tmp_path):
         clusters_dir = tmp_path / "clusters"
@@ -366,7 +366,7 @@ class TestResolveBaseResourcePath:
         result = _resolve_base_resource_path(
             str(clusters_dir / "my-cluster"), "crossplane", str(tpl_dir), "gcp/standard"
         )
-        assert "gcp/standard/base/crossplane" in result
+        assert "gcp/standard/crossplane" in result
 
 
 # ===================== generate_metadata tests =====================
@@ -423,7 +423,7 @@ class TestClusterParams:
 
     def test_profile_attr_available(self):
         params_default = ClusterParams(name="p", region="x", tier="t")
-        assert params_default.profile == "aws-ha"
+        assert params_default.profile == "aws/standard"
 
         params_custom = ClusterParams(name="p", region="x", tier="t", profile="test")
         assert params_custom.profile == "test"

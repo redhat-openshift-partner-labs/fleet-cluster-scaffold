@@ -19,7 +19,7 @@ class ClusterParams:
     tier: str
     environment: str = "development"
     base_domain: str = "openshiftpartnerlabs.com"
-    profile: str = "aws-ha"
+    profile: str = "aws/standard"
     control_plane_type: str = "m7i.4xlarge"
     worker_type: str = "m7i.2xlarge"
     control_plane_replicas: int = 3
@@ -43,9 +43,9 @@ def _resolve_base_resource_path(
     cluster_templates_dir: str,
     profile: str,
 ) -> str:
-    """Compute the relative path from <cluster_dir>/<subdir>/ to cluster-templates/<profile>/base/<subdir>."""
+    """Compute the relative path from <cluster_dir>/<subdir>/ to cluster-templates/<profile>/<subdir>."""
     abs_sub = os.path.abspath(os.path.join(cluster_dir, subdir))
-    abs_tpl = os.path.abspath(os.path.join(cluster_templates_dir, profile, "base", subdir))
+    abs_tpl = os.path.abspath(os.path.join(cluster_templates_dir, profile, subdir))
     return os.path.relpath(abs_tpl, abs_sub)
 
 
@@ -412,7 +412,7 @@ def _write(path: str, content: str) -> None:
 
 def write_cluster_dir(base_path: str, params: ClusterParams, cluster_templates_dir: str = "cluster-templates") -> str:
     cluster_dir = os.path.join(base_path, params.name)
-    profile = params.profile or "aws-ha"
+    profile = params.profile or "aws/standard"
 
     hive_base_path = _resolve_base_resource_path(cluster_dir, "hive", cluster_templates_dir, profile)
     crossplane_base_path = _resolve_base_resource_path(cluster_dir, "crossplane", cluster_templates_dir, profile)
