@@ -89,8 +89,7 @@ def test_scaffold_fails_on_invalid_kustomize(mock_run, mock_which, tmp_path):
         "--cluster-templates-dir",
         str(tpl_dir),
     ]
-    with pytest.raises(SystemExit, match="1"):
-        main(args)
+    assert main(args) == 1
 
 
 @mock.patch("scaffold.cli.shutil.which")
@@ -147,9 +146,7 @@ def test_shows_kustomize_missing_error(mock_which, tmp_path):
         "--cluster-templates-dir",
         str(tpl_dir),
     ]
-    with pytest.raises(SystemExit) as exc_info:
-        main(args)
-    assert exc_info.value.code == 1
+    assert main(args) == 1
 
 
 @mock.patch("scaffold.cli.subprocess.run")

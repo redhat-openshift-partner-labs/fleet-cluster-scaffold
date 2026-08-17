@@ -19,13 +19,14 @@ from scaffold.lib import ClusterParams, write_cluster_dir
 _LOG = logging.getLogger("scaffold")
 
 
-def check_kustomize() -> None:
-    """Ensure kustomize is on PATH. Exit 1 with error if missing."""
+def check_kustomize() -> bool:
+    """Return True if kustomize is on PATH, False otherwise."""
     if shutil.which("kustomize") is None:
         _LOG.error(
             "kustomize not found on PATH. Install it before scaffolding."
         )
-        sys.exit(1)
+        return False
+    return True
 
 
 def main(args=None) -> int:
@@ -124,7 +125,8 @@ def main(args=None) -> int:
         _LOG.info("Skipping kustomize validation (+skip-validation).")
         return 0
 
-    check_kustomize()
+    if not check_kustomize():
+        return 1
 
     # Validate each sub-dir
     for subdir in ["hive", "crossplane"]:
@@ -136,7 +138,7 @@ def main(args=None) -> int:
         )
         if result.returncode != 0:
             _LOG.error("kustomize build %s failed: %s", path, result.stderr)
-            sys.exit(1)
+            return 1
         _LOG.info("  -> %s: OK", subdir)
 
     _LOG.info("Cluster %r scaffolded successfully", params.name)
