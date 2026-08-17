@@ -101,7 +101,7 @@ def main(args=None) -> int:
         tier=parsed.tier,
         environment=parsed.environment,
         control_plane_type=parsed.control_plane_type,
-        worker_type=get_worker_type_from_profile(parsed.worker_type, parsed.profile),
+        worker_type=parsed.worker_type,
         control_plane_replicas=parsed.control_plane_replicas,
         worker_replicas=parsed.worker_replicas,
         image_set=parsed.image_set,
@@ -135,16 +135,6 @@ def main(args=None) -> int:
     _LOG.info("Cluster %r scaffolded successfully", params.name)
     return 0
 
-
-def get_worker_type_from_profile(worker_type: str, profile: str | None) -> str:
-    """Map an AWS profile name to a worker-type preset."""
-    overrides = {
-        "aws-ha": "m7i.2xlarge",
-        "aws-small": "m5.large",
-    }
-    if profile and profile in overrides:
-        return overrides[profile]
-    return
 
 
 entry_point_args = None  # allow test harness to override sys.argv

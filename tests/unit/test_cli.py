@@ -2,6 +2,7 @@ import subprocess
 from unittest import mock
 
 import pytest
+import yaml
 
 from scaffold.cli import main
 
@@ -194,6 +195,45 @@ def test_no_skip_calls_kustomize_check(mock_run, default_args):
         mock_run.return_value = subprocess.CompletedProcess([], returncode=0, stdout="", stderr="")
         main(default_args)
     assert mock_run.call_count == 2
+
+
+@mock.patch("scaffold.cli.subprocess.run")
+def test_worker_type_used_verbatim_without_profile(mock_run, tmp_path):
+    mock_run.return_value = subprocess.CompletedProcess([], returncode=0, stdout="", stderr="")
+    tpl_dir = tmp_path / "cluster-templates"
+    tpl_dir.mkdir()
+    with mock.patch("scaffold.cli.shutil.which", return_value="kustomize"):
+        main([
+            "--name", "wt",
+            "--region", "us-east-1",
+            "--tier", "base",
+            "--worker-type", "c5.4xlarge",
+            "--base-path", str(tmp_path),
+            "--cluster-templates-dir", str(tpl_dir),
+        ])
+    mp = yaml.safe_load((tmp_path / "wt" / "hive" / "patches" / "machinepool-worker.yaml").read_text())
+    type_ops = [op for op in mp if op["path"] == "/spec/platform/aws/type"]
+    assert type_ops[0]["value"] == "c5.4xlarge"
+
+
+@mock.patch("scaffold.cli.subprocess.run")
+def test_worker_type_used_even_with_profile(mock_run, tmp_path):
+    mock_run.return_value = subprocess.CompletedProcess([], returncode=0, stdout="", stderr="")
+    tpl_dir = tmp_path / "cluster-templates"
+    tpl_dir.mkdir()
+    with mock.patch("scaffold.cli.shutil.which", return_value="kustomize"):
+        main([
+            "--name", "wt2",
+            "--region", "us-east-1",
+            "--tier", "base",
+            "--worker-type", "r6i.xlarge",
+            "--profile", "aws-ha",
+            "--base-path", str(tmp_path),
+            "--cluster-templates-dir", str(tpl_dir),
+        ])
+    mp = yaml.safe_load((tmp_path / "wt2" / "hive" / "patches" / "machinepool-worker.yaml").read_text())
+    type_ops = [op for op in mp if op["path"] == "/spec/platform/aws/type"]
+    assert type_ops[0]["value"] == "r6i.xlarge"
 
 
 if __name__ == "__main__":
