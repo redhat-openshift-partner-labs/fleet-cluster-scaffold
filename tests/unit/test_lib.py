@@ -10,6 +10,7 @@ from scaffold.lib import (
     generate_hive_patches,
     generate_metadata,
     get_default_zones,
+    validate_cluster_name,
     write_cluster_dir,
 )
 
@@ -431,3 +432,56 @@ class TestClusterParams:
     def test_base_domain_attr_available(self):
         params = ClusterParams(name="b", region="r", tier="t", base_domain="mydomain.com")
         assert params.base_domain == "mydomain.com"
+
+
+# ===================== validate_cluster_name tests =====================
+
+
+class TestValidateClusterName:
+    def test_valid_simple(self):
+        validate_cluster_name("my-cluster")
+
+    def test_valid_single_char(self):
+        validate_cluster_name("a")
+
+    def test_valid_numeric(self):
+        validate_cluster_name("cluster-01")
+
+    def test_valid_max_length(self):
+        validate_cluster_name("a" * 63)
+
+    def test_rejects_empty(self):
+        with pytest.raises(ValueError, match="empty"):
+            validate_cluster_name("")
+
+    def test_rejects_uppercase(self):
+        with pytest.raises(ValueError):
+            validate_cluster_name("My-Cluster")
+
+    def test_rejects_spaces(self):
+        with pytest.raises(ValueError):
+            validate_cluster_name("my cluster")
+
+    def test_rejects_path_traversal(self):
+        with pytest.raises(ValueError):
+            validate_cluster_name("../../etc")
+
+    def test_rejects_special_chars(self):
+        with pytest.raises(ValueError):
+            validate_cluster_name("my_cluster!")
+
+    def test_rejects_underscore(self):
+        with pytest.raises(ValueError):
+            validate_cluster_name("my_cluster")
+
+    def test_rejects_starts_with_hyphen(self):
+        with pytest.raises(ValueError):
+            validate_cluster_name("-cluster")
+
+    def test_rejects_ends_with_hyphen(self):
+        with pytest.raises(ValueError):
+            validate_cluster_name("cluster-")
+
+    def test_rejects_too_long(self):
+        with pytest.raises(ValueError, match="63"):
+            validate_cluster_name("a" * 64)

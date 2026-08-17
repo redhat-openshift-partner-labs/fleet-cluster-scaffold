@@ -14,7 +14,7 @@ import shutil
 import subprocess
 import sys
 
-from scaffold.lib import ClusterParams, write_cluster_dir
+from scaffold.lib import ClusterParams, validate_cluster_name, write_cluster_dir
 
 _LOG = logging.getLogger("scaffold")
 
@@ -115,6 +115,12 @@ def main(args=None) -> int:
         kwargs["base_domain"] = parsed.base_domain
     if parsed.profile is not None:
         kwargs["profile"] = parsed.profile
+    try:
+        validate_cluster_name(parsed.name)
+    except ValueError as exc:
+        _LOG.error("%s", exc)
+        return 1
+
     params = ClusterParams(**kwargs)
 
     _LOG.info("Scaffolding cluster %r in %s/", params.name, parsed.base_path)

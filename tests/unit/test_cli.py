@@ -273,5 +273,19 @@ def test_profile_forwarded_to_kustomization_resource(tmp_path):
     assert "aws/standard/hive" in kust["resources"][0]
 
 
+def test_rejects_invalid_cluster_name(tmp_path):
+    tpl_dir = tmp_path / "cluster-templates"
+    tpl_dir.mkdir()
+    result = main([
+        "--name", "INVALID_NAME!",
+        "--region", "us-east-1",
+        "--tier", "base",
+        "--base-path", str(tmp_path),
+        "--cluster-templates-dir", str(tpl_dir),
+        "--skip-validation",
+    ])
+    assert result == 1
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
