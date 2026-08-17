@@ -51,6 +51,7 @@ def _resolve_base_resource_path(
 
 # ===================== hive patch generation =====================
 
+# TODO: AWS-specific — parameterize for Azure/GCP when multi-cloud support is added
 def generate_hive_patches(params: ClusterParams, hive_base_path: str = "../base/hive") -> dict[str, str]:
     n = params.name
     patches: dict[str, str] = {}
@@ -271,6 +272,7 @@ def generate_hive_patches(params: ClusterParams, hive_base_path: str = "../base/
 
 # ===================== crossplane patch generation =====================
 
+# TODO: AWS-specific — parameterize for Azure/GCP when multi-cloud support is added
 def generate_crossplane_patches(params: ClusterParams, crossplane_base_path: str = "../base/crossplane") -> dict[str, str]:
     n = params.name
     patches: dict[str, str] = {}
