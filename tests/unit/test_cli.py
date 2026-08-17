@@ -236,5 +236,54 @@ def test_worker_type_used_even_with_profile(mock_run, tmp_path):
     assert type_ops[0]["value"] == "r6i.xlarge"
 
 
+def test_base_domain_forwarded_to_output(tmp_path):
+    tpl_dir = tmp_path / "cluster-templates"
+    tpl_dir.mkdir()
+    main([
+        "--name", "bd",
+        "--region", "us-east-1",
+        "--tier", "base",
+        "--base-domain", "custom.example.com",
+        "--base-path", str(tmp_path),
+        "--cluster-templates-dir", str(tpl_dir),
+        "--skip-validation",
+    ])
+    ic = yaml.safe_load((tmp_path / "bd" / "hive" / "patches" / "install-config.yaml").read_text())
+    embedded = yaml.safe_load(ic["stringData"]["install-config.yaml"])
+    assert embedded["baseDomain"] == "custom.example.com"
+
+
+def test_base_domain_default_when_omitted(tmp_path):
+    tpl_dir = tmp_path / "cluster-templates"
+    tpl_dir.mkdir()
+    main([
+        "--name", "bd2",
+        "--region", "us-east-1",
+        "--tier", "base",
+        "--base-path", str(tmp_path),
+        "--cluster-templates-dir", str(tpl_dir),
+        "--skip-validation",
+    ])
+    ic = yaml.safe_load((tmp_path / "bd2" / "hive" / "patches" / "install-config.yaml").read_text())
+    embedded = yaml.safe_load(ic["stringData"]["install-config.yaml"])
+    assert embedded["baseDomain"] == "openshiftpartnerlabs.com"
+
+
+def test_profile_forwarded_to_kustomization_resource(tmp_path):
+    tpl_dir = tmp_path / "cluster-templates"
+    tpl_dir.mkdir()
+    main([
+        "--name", "pf",
+        "--region", "us-east-1",
+        "--tier", "base",
+        "--profile", "aws/standard",
+        "--base-path", str(tmp_path),
+        "--cluster-templates-dir", str(tpl_dir),
+        "--skip-validation",
+    ])
+    kust = yaml.safe_load((tmp_path / "pf" / "hive" / "kustomization.yaml").read_text())
+    assert "aws/standard/base/hive" in kust["resources"][0]
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

@@ -95,7 +95,7 @@ def main(args=None) -> int:
 
     zones = parsed.zones.split(",") if parsed.zones else None
 
-    params = ClusterParams(
+    kwargs = dict(
         name=parsed.name,
         region=parsed.region,
         tier=parsed.tier,
@@ -108,6 +108,11 @@ def main(args=None) -> int:
         zones=zones,
         htpasswd_provider_name=parsed.htpasswd_provider_name,
     )
+    if parsed.base_domain is not None:
+        kwargs["base_domain"] = parsed.base_domain
+    if parsed.profile is not None:
+        kwargs["profile"] = parsed.profile
+    params = ClusterParams(**kwargs)
 
     _LOG.info("Scaffolding cluster %r in %s/", params.name, parsed.base_path)
     cluster_dir = write_cluster_dir(parsed.base_path, params, parsed.cluster_templates_dir)
