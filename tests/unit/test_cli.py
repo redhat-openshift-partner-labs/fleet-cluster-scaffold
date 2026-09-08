@@ -1,3 +1,5 @@
+import shutil
+from pathlib import Path
 import subprocess
 from unittest import mock
 
@@ -11,7 +13,7 @@ from scaffold.cli import main
 def default_args(tmp_path):
     """Return a list of CLI arguments for the standard scaffold command."""
     tpl_dir = tmp_path / "cluster-templates"
-    (tpl_dir / "aws" / "standard").mkdir(parents=True)
+    shutil.copytree(Path(__file__).resolve().parents[2] / "cluster-templates", tpl_dir)
     return [
         "--name",
         "my-cluster",
@@ -40,7 +42,7 @@ def test_scaffold_writes_and_validates(mock_run, mock_which, tmp_path):
     )
     mock_which.return_value = "/usr/bin/kustomize"
     tpl_dir = tmp_path / "cluster-templates"
-    (tpl_dir / "aws" / "standard").mkdir(parents=True)
+    shutil.copytree(Path(__file__).resolve().parents[2] / "cluster-templates", tpl_dir)
     args = [
         "--name",
         "test-01",
@@ -72,7 +74,7 @@ def test_scaffold_fails_on_invalid_kustomize(mock_run, mock_which, tmp_path):
     )
     mock_which.return_value = "/usr/bin/kustomize"
     tpl_dir = tmp_path / "cluster-templates"
-    (tpl_dir / "aws" / "standard").mkdir(parents=True)
+    shutil.copytree(Path(__file__).resolve().parents[2] / "cluster-templates", tpl_dir)
     args = [
         "--name",
         "bad-cluster",
@@ -100,7 +102,7 @@ def test_scaffold_with_custom_zones(mock_run, mock_which, tmp_path):
     )
     mock_which.return_value = "/usr/bin/kustomize"
     tpl_dir = tmp_path / "cluster-templates"
-    (tpl_dir / "aws" / "standard").mkdir(parents=True)
+    shutil.copytree(Path(__file__).resolve().parents[2] / "cluster-templates", tpl_dir)
     args = [
         "--name",
         "zoned",
@@ -129,7 +131,7 @@ def test_scaffold_with_custom_zones(mock_run, mock_which, tmp_path):
 def test_shows_kustomize_missing_error(mock_which, tmp_path):
     mock_which.return_value = None
     tpl_dir = tmp_path / "cluster-templates"
-    (tpl_dir / "aws" / "standard").mkdir(parents=True)
+    shutil.copytree(Path(__file__).resolve().parents[2] / "cluster-templates", tpl_dir)
     args = [
         "--name",
         "no-kust",
@@ -170,7 +172,7 @@ def test_no_skip_validates_kustomize_run(mock_run, default_args):
 @mock.patch("scaffold.cli.shutil.which")
 def test_skip_validation_skips_kustomize_check(mock_which, tmp_path):
     tpl_dir = tmp_path / "cluster-templates"
-    (tpl_dir / "aws" / "standard").mkdir(parents=True)
+    shutil.copytree(Path(__file__).resolve().parents[2] / "cluster-templates", tpl_dir)
     main([
         "--name", "x",
         "--region", "r",
@@ -189,7 +191,7 @@ def test_skip_validation_skips_kustomize_check(mock_which, tmp_path):
 def test_worker_type_used_verbatim_without_profile(mock_run, tmp_path):
     mock_run.return_value = subprocess.CompletedProcess([], returncode=0, stdout="", stderr="")
     tpl_dir = tmp_path / "cluster-templates"
-    (tpl_dir / "aws" / "standard").mkdir(parents=True)
+    shutil.copytree(Path(__file__).resolve().parents[2] / "cluster-templates", tpl_dir)
     with mock.patch("scaffold.cli.shutil.which", return_value="kustomize"):
         main([
             "--name", "wt",
@@ -208,7 +210,7 @@ def test_worker_type_used_verbatim_without_profile(mock_run, tmp_path):
 def test_worker_type_used_even_with_profile(mock_run, tmp_path):
     mock_run.return_value = subprocess.CompletedProcess([], returncode=0, stdout="", stderr="")
     tpl_dir = tmp_path / "cluster-templates"
-    (tpl_dir / "aws" / "standard").mkdir(parents=True)
+    shutil.copytree(Path(__file__).resolve().parents[2] / "cluster-templates", tpl_dir)
     with mock.patch("scaffold.cli.shutil.which", return_value="kustomize"):
         main([
             "--name", "wt2",
@@ -226,7 +228,7 @@ def test_worker_type_used_even_with_profile(mock_run, tmp_path):
 
 def test_base_domain_forwarded_to_output(tmp_path):
     tpl_dir = tmp_path / "cluster-templates"
-    (tpl_dir / "aws" / "standard").mkdir(parents=True)
+    shutil.copytree(Path(__file__).resolve().parents[2] / "cluster-templates", tpl_dir)
     main([
         "--name", "bd",
         "--region", "us-east-1",
@@ -243,7 +245,7 @@ def test_base_domain_forwarded_to_output(tmp_path):
 
 def test_base_domain_default_when_omitted(tmp_path):
     tpl_dir = tmp_path / "cluster-templates"
-    (tpl_dir / "aws" / "standard").mkdir(parents=True)
+    shutil.copytree(Path(__file__).resolve().parents[2] / "cluster-templates", tpl_dir)
     main([
         "--name", "bd2",
         "--region", "us-east-1",
@@ -259,7 +261,7 @@ def test_base_domain_default_when_omitted(tmp_path):
 
 def test_profile_forwarded_to_kustomization_resource(tmp_path):
     tpl_dir = tmp_path / "cluster-templates"
-    (tpl_dir / "aws" / "standard").mkdir(parents=True)
+    shutil.copytree(Path(__file__).resolve().parents[2] / "cluster-templates", tpl_dir)
     main([
         "--name", "pf",
         "--region", "us-east-1",
@@ -292,7 +294,7 @@ def test_rejects_invalid_cluster_name(tmp_path):
 
 def test_refuses_overwrite_when_dir_exists(tmp_path):
     tpl_dir = tmp_path / "cluster-templates"
-    (tpl_dir / "aws" / "standard").mkdir(parents=True)
+    shutil.copytree(Path(__file__).resolve().parents[2] / "cluster-templates", tpl_dir)
     (tmp_path / "existing").mkdir()
     result = main([
         "--name", "existing",
@@ -307,7 +309,7 @@ def test_refuses_overwrite_when_dir_exists(tmp_path):
 
 def test_force_allows_overwrite(tmp_path):
     tpl_dir = tmp_path / "cluster-templates"
-    (tpl_dir / "aws" / "standard").mkdir(parents=True)
+    shutil.copytree(Path(__file__).resolve().parents[2] / "cluster-templates", tpl_dir)
     (tmp_path / "existing").mkdir()
     result = main([
         "--name", "existing",
@@ -324,7 +326,7 @@ def test_force_allows_overwrite(tmp_path):
 
 def test_fresh_directory_without_force(tmp_path):
     tpl_dir = tmp_path / "cluster-templates"
-    (tpl_dir / "aws" / "standard").mkdir(parents=True)
+    shutil.copytree(Path(__file__).resolve().parents[2] / "cluster-templates", tpl_dir)
     result = main([
         "--name", "fresh",
         "--region", "us-east-1",
@@ -354,3 +356,33 @@ def test_rejects_non_aws_profile(tmp_path):
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+@pytest.mark.parametrize("option,value", [
+    ("--control-plane-replicas", "7"), ("--worker-replicas", "-1"),
+    ("--worker-type", " "), ("--zones", "a,,b"), ("--zones", ""),
+    ("--profile", "aws/unknown"), ("--tier", "test"), ("--name", "INVALID"),
+])
+@pytest.mark.parametrize("existing", [False, True])
+def test_invalid_configuration_never_writes(default_args, tmp_path, caplog, option, value, existing):
+    cluster = tmp_path / "my-cluster"
+    if existing:
+        cluster.mkdir()
+        (cluster / "kustomization.yaml").write_text("keep me\n")
+    before = {str(p): p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
+    assert main(default_args + [option, value, "--force", "--skip-validation"]) == 1
+    assert {str(p): p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()} == before
+    assert option in caplog.text
+
+
+def test_cli_normalizes_zones(default_args, tmp_path):
+    assert main(default_args + ["--zones", " custom-z, custom-a ", "--skip-validation"]) == 0
+    secret = yaml.safe_load((tmp_path / "my-cluster/hive/patches/install-config.yaml").read_text())
+    config = yaml.safe_load(secret["stringData"]["install-config.yaml"])
+    assert config["controlPlane"]["platform"]["aws"]["zones"] == ["custom-z", "custom-a"]
+
+
+def test_missing_required_base_never_writes(default_args, tmp_path):
+    (tmp_path / "cluster-templates/aws/standard/hive/kustomization.yaml").unlink()
+    assert main(default_args + ["--skip-validation"]) == 1
+    assert not (tmp_path / "my-cluster").exists()

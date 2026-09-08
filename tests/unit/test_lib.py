@@ -532,5 +532,5 @@ class TestValidateProfile:
     def test_rejects_nonexistent_profile(self, tmp_path):
         tpl = tmp_path / "cluster-templates"
         tpl.mkdir()
-        with pytest.raises(ValueError, match="not found"):
+        with pytest.raises(ValueError, match="not supported"):
             validate_profile("aws/nonexistent", str(tpl))

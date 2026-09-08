@@ -10,7 +10,7 @@ import os
 
 import yaml
 
-from scaffold.models import ClusterParams, get_default_zones, validate_cluster_name
+from scaffold.models import PROFILE_POLICIES, ClusterParams, get_default_zones, validate_cluster_name
 
 
 class _LiteralStr(str):
@@ -29,16 +29,25 @@ def validate_profile(profile: str, cluster_templates_dir: str) -> None:
 
     Raises ValueError if the profile is not AWS-based or the directory is missing.
     """
-    if not (profile.startswith("aws") ):
-        raise ValueError(
-            f"Profile {profile!r} is not supported. "
-            "Only AWS profiles (aws/*) are currently supported."
-        )
+    if profile not in PROFILE_POLICIES:
+        raise ValueError(f"Profile {profile!r} is not supported.")
     tpl_dir = os.path.join(cluster_templates_dir, profile)
     if not os.path.isdir(tpl_dir):
         raise ValueError(
             f"Template directory for profile {profile!r} not found at {tpl_dir}."
         )
+
+
+def validate_template_bases(profile: str, cluster_templates_dir: str) -> None:
+    """Check filesystem prerequisites independently of configuration resolution."""
+    validate_profile(profile, cluster_templates_dir)
+    subdirs = ["hive", "crossplane"]
+    if PROFILE_POLICIES[profile].post_install_workers:
+        subdirs.append("post-install")
+    for subdir in subdirs:
+        path = os.path.join(cluster_templates_dir, profile, subdir, "kustomization.yaml")
+        if not os.path.isfile(path):
+            raise ValueError(f"Required template base not found at {path}.")
 
 
 def _resolve_base_resource_path(

@@ -14,7 +14,9 @@ import shutil
 import subprocess
 import sys
 
-from scaffold.lib import ClusterParams, validate_cluster_name, validate_profile, write_cluster_dir
+from pydantic import ValidationError
+
+from scaffold.lib import ClusterParams, validate_template_bases, write_cluster_dir
 
 _LOG = logging.getLogger("scaffold")
 
@@ -36,7 +38,7 @@ def main(args=None) -> int:
     parser.add_argument("--name", required=True, help="Cluster name")
     parser.add_argument("--region", required=True, help="AWS region")
     parser.add_argument(
-        "--tier", required=True, choices=["base", "virt", "ai"], help="Tier"
+        "--tier", required=True, help="Tier"
     )
 
     # Environment
@@ -51,9 +53,9 @@ def main(args=None) -> int:
         "--worker-type", default="m7i.2xlarge"
     )
     parser.add_argument(
-        "--control-plane-replicas", type=int, default=3,
+        "--control-plane-replicas", type=int, default=None,
     )
-    parser.add_argument("--worker-replicas", type=int, default=3)
+    parser.add_argument("--worker-replicas", type=int, default=None)
 
     # Image set
     parser.add_argument("--image-set", default="img4.21.13-x86-64-appsub")
@@ -67,7 +69,7 @@ def main(args=None) -> int:
     )
 
     # NEW: AWS profile mapping to worker type convention
-    parser.add_argument("--profile", default=None, help="AWS profile (maps to worker-type)")
+    parser.add_argument("--profile", default=None, help="AWS topology profile")
 
     # NEW: base domain override
     parser.add_argument("--base-domain", default=None, help="Cluster base DNS domain")
@@ -104,7 +106,7 @@ def main(args=None) -> int:
 
     parsed = parser.parse_args(args)
 
-    zones = parsed.zones.split(",") if parsed.zones else None
+    zones = [zone.strip() for zone in parsed.zones.split(",")] if parsed.zones is not None else None
 
     kwargs = dict(
         name=parsed.name,
@@ -113,8 +115,6 @@ def main(args=None) -> int:
         environment=parsed.environment,
         control_plane_type=parsed.control_plane_type,
         worker_type=parsed.worker_type,
-        control_plane_replicas=parsed.control_plane_replicas,
-        worker_replicas=parsed.worker_replicas,
         image_set=parsed.image_set,
         zones=zones,
         htpasswd_provider_name=parsed.htpasswd_provider_name,
@@ -123,15 +123,20 @@ def main(args=None) -> int:
         kwargs["base_domain"] = parsed.base_domain
     if parsed.profile is not None:
         kwargs["profile"] = parsed.profile
+    for field in ("control_plane_replicas", "worker_replicas"):
+        value = getattr(parsed, field)
+        if value is not None:
+            kwargs[field] = value
     try:
-        validate_cluster_name(parsed.name)
-    except ValueError as exc:
-        _LOG.error("%s", exc)
+        params = ClusterParams(**kwargs)
+    except ValidationError as exc:
+        for error in exc.errors():
+            option = "--" + str(error["loc"][0]).replace("_", "-")
+            _LOG.error("%s: %s", option, error["msg"])
         return 1
 
-    profile = parsed.profile or "aws/standard"
     try:
-        validate_profile(profile, parsed.cluster_templates_dir)
+        validate_template_bases(params.profile, parsed.cluster_templates_dir)
     except ValueError as exc:
         _LOG.error("%s", exc)
         return 1
@@ -142,8 +147,6 @@ def main(args=None) -> int:
             "Directory %s already exists. Use --force to overwrite.", cluster_dir
         )
         return 1
-
-    params = ClusterParams(**kwargs)
 
     _LOG.info("Scaffolding cluster %r in %s/", params.name, parsed.base_path)
     cluster_dir = write_cluster_dir(parsed.base_path, params, parsed.cluster_templates_dir)
