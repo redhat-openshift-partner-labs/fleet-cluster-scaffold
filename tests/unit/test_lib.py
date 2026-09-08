@@ -328,7 +328,7 @@ class TestWriteClusterDir:
         params = ClusterParams(
             name="param-test",
             region="us-west-1",
-            tier="test",
+            tier="base",
             profile="aws/standard",
         )
         write_cluster_dir(str(tmp_path), params, str(tpl_dir))
@@ -429,14 +429,14 @@ class TestClusterParams:
         assert params.zones == zones
 
     def test_profile_attr_available(self):
-        params_default = ClusterParams(name="p", region="x", tier="t")
+        params_default = ClusterParams(name="p", region="x", tier="base")
         assert params_default.profile == "aws/standard"
 
-        params_custom = ClusterParams(name="p", region="x", tier="t", profile="test")
-        assert params_custom.profile == "test"
+        params_custom = ClusterParams(name="p", region="x", tier="base", profile="aws/compact")
+        assert params_custom.profile == "aws/compact"
 
     def test_base_domain_attr_available(self):
-        params = ClusterParams(name="b", region="r", tier="t", base_domain="mydomain.com")
+        params = ClusterParams(name="b", region="r", tier="base", base_domain="mydomain.com")
         assert params.base_domain == "mydomain.com"
 
 

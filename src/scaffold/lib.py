@@ -7,10 +7,10 @@ resources instead of copying templates into each cluster overlay.
 from __future__ import annotations
 
 import os
-import re
-from dataclasses import dataclass
 
 import yaml
+
+from scaffold.models import ClusterParams, get_default_zones, validate_cluster_name
 
 
 class _LiteralStr(str):
@@ -22,27 +22,6 @@ def _literal_str_representer(dumper, data):
 
 
 yaml.add_representer(_LiteralStr, _literal_str_representer)
-
-_DNS_LABEL_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
-
-
-def validate_cluster_name(name: str) -> None:
-    """Validate that *name* is a valid DNS-1123 label (RFC 1123).
-
-    Raises ValueError if invalid.
-    """
-    if not name:
-        raise ValueError("Cluster name must not be empty.")
-    if len(name) > 63:
-        raise ValueError(
-            f"Cluster name must be at most 63 characters, got {len(name)}."
-        )
-    if not _DNS_LABEL_RE.match(name):
-        raise ValueError(
-            f"Cluster name {name!r} is not a valid DNS-1123 label. "
-            "Use only lowercase letters, digits, and hyphens; "
-            "must start and end with an alphanumeric character."
-        )
 
 
 def validate_profile(profile: str, cluster_templates_dir: str) -> None:
@@ -60,31 +39,6 @@ def validate_profile(profile: str, cluster_templates_dir: str) -> None:
         raise ValueError(
             f"Template directory for profile {profile!r} not found at {tpl_dir}."
         )
-
-
-@dataclass
-class ClusterParams:
-    name: str
-    region: str
-    tier: str
-    environment: str = "development"
-    base_domain: str = "openshiftpartnerlabs.com"
-    profile: str = "aws/standard"
-    control_plane_type: str = "m7i.4xlarge"
-    worker_type: str = "m7i.2xlarge"
-    control_plane_replicas: int = 3
-    worker_replicas: int = 3
-    image_set: str = "img4.21.13-x86-64-appsub"
-    zones: list[str] | None = None
-    htpasswd_provider_name: str | None = None
-
-    def __post_init__(self) -> None:
-        if self.zones is None:
-            self.zones = get_default_zones(self.region)
-
-
-def get_default_zones(region: str) -> list[str]:
-    return [f"{region}a", f"{region}b", f"{region}c"]
 
 
 def _resolve_base_resource_path(
