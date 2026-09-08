@@ -386,3 +386,17 @@ def test_missing_required_base_never_writes(default_args, tmp_path):
     (tmp_path / "cluster-templates/aws/standard/hive/kustomization.yaml").unlink()
     assert main(default_args + ["--skip-validation"]) == 1
     assert not (tmp_path / "my-cluster").exists()
+
+
+@pytest.mark.parametrize("profile", ["aws/sno", "aws/compact", "aws/standard"])
+@pytest.mark.parametrize("option", ["--control-plane-replicas", "--worker-replicas"])
+def test_each_profile_rejects_conflicting_replicas(default_args, tmp_path, caplog, profile, option):
+    assert main(default_args + ["--profile", profile, option, "7", "--skip-validation"]) == 1
+    assert not (tmp_path / "my-cluster").exists()
+    assert profile in caplog.text and option in caplog.text and "supplied 7" in caplog.text
+
+
+def test_argparse_integer_syntax_still_exits_two(default_args):
+    with pytest.raises(SystemExit) as exc:
+        main(default_args + ["--worker-replicas", "1.5"])
+    assert exc.value.code == 2

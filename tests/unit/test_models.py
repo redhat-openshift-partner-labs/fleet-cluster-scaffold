@@ -59,3 +59,15 @@ def test_defaults_and_public_import():
     assert params.control_plane_type == "m7i.4xlarge"
     assert params.worker_type == "m7i.2xlarge"
     assert make_params(zones=None).zones == params.zones
+
+
+@pytest.mark.parametrize("region", [None, 123])
+def test_invalid_region_with_default_zones_is_validation_error(region):
+    with pytest.raises(ValueError):
+        make_params(region=region, zones=None)
+
+
+@pytest.mark.parametrize("profile,required", [("aws/sno", 0), ("aws/compact", 0), ("aws/standard", 3)])
+def test_worker_conflict_explains_profile_and_values(profile, required):
+    with pytest.raises(ValueError, match=rf"{profile}.*7.*{required}"):
+        make_params(profile=profile, worker_replicas=7)

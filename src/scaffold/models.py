@@ -101,7 +101,7 @@ class ClusterParams(BaseModel):
     @field_validator("zones", mode="before")
     @classmethod
     def default_zones(cls, value: object, info: ValidationInfo) -> object:
-        if value is None:
+        if value is None and "region" in info.data:
             return get_default_zones(info.data["region"])
         return value
 

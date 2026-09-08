@@ -42,15 +42,15 @@ def main(args=None) -> int:
     )
 
     # Environment
-    parser.add_argument("--environment", default="development", help="Environment name")
+    parser.add_argument("--environment", default=None, help="Environment name")
 
     # Control-plane tuning
     parser.add_argument(
         "--control-plane-type",
-        default="m7i.4xlarge",
+        default=None,
     )
     parser.add_argument(
-        "--worker-type", default="m7i.2xlarge"
+        "--worker-type", default=None
     )
     parser.add_argument(
         "--control-plane-replicas", type=int, default=None,
@@ -58,7 +58,7 @@ def main(args=None) -> int:
     parser.add_argument("--worker-replicas", type=int, default=None)
 
     # Image set
-    parser.add_argument("--image-set", default="img4.21.13-x86-64-appsub")
+    parser.add_argument("--image-set", default=None)
 
     # Zones override
     parser.add_argument("--zones", default=None, help="Comma-separated AZ list")
@@ -68,10 +68,10 @@ def main(args=None) -> int:
         "--base-path", default=".", help="Parent directory for cluster overlays"
     )
 
-    # NEW: AWS profile mapping to worker type convention
+    # AWS topology
     parser.add_argument("--profile", default=None, help="AWS topology profile")
 
-    # NEW: base domain override
+    # Base domain override
     parser.add_argument("--base-domain", default=None, help="Cluster base DNS domain")
 
     # Cluster metadata
@@ -108,25 +108,13 @@ def main(args=None) -> int:
 
     zones = [zone.strip() for zone in parsed.zones.split(",")] if parsed.zones is not None else None
 
-    kwargs = dict(
-        name=parsed.name,
-        region=parsed.region,
-        tier=parsed.tier,
-        environment=parsed.environment,
-        control_plane_type=parsed.control_plane_type,
-        worker_type=parsed.worker_type,
-        image_set=parsed.image_set,
-        zones=zones,
-        htpasswd_provider_name=parsed.htpasswd_provider_name,
-    )
-    if parsed.base_domain is not None:
-        kwargs["base_domain"] = parsed.base_domain
-    if parsed.profile is not None:
-        kwargs["profile"] = parsed.profile
-    for field in ("control_plane_replicas", "worker_replicas"):
-        value = getattr(parsed, field)
-        if value is not None:
-            kwargs[field] = value
+    kwargs = {
+        field: getattr(parsed, field)
+        for field in ClusterParams.model_fields
+        if getattr(parsed, field) is not None
+    }
+    if zones is not None:
+        kwargs["zones"] = zones
     try:
         params = ClusterParams(**kwargs)
     except ValidationError as exc:
