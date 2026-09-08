@@ -69,57 +69,61 @@ def generate_hive_patches(params: ClusterParams, hive_base_path: str = "../base/
     n = params.name
     patches: dict[str, str] = {}
 
+    kustomization = {
+        "apiVersion": "kustomize.config.k8s.io/v1beta1",
+        "kind": "Kustomization",
+        "namespace": n,
+        "resources": [hive_base_path],
+        "patches": [
+            {"path": "patches/install-config.yaml"},
+            {
+                "target": {
+                    "kind": "Secret",
+                    "name": "cluster-placeholder-install-config",
+                },
+                "path": "patches/install-config-meta.yaml",
+            },
+            {
+                "target": {"kind": "Namespace", "name": "cluster-placeholder"},
+                "path": "patches/namespace.yaml",
+            },
+            {
+                "target": {
+                    "kind": "ClusterDeployment",
+                    "name": "cluster-placeholder",
+                },
+                "path": "patches/clusterdeployment.yaml",
+            },
+            {
+                "target": {
+                    "kind": "MachinePool",
+                    "name": "cluster-placeholder-worker",
+                },
+                "path": "patches/machinepool-worker.yaml",
+            },
+            {
+                "target": {
+                    "kind": "ManagedCluster",
+                    "name": "cluster-placeholder",
+                },
+                "path": "patches/managedcluster.yaml",
+            },
+            {
+                "target": {
+                    "kind": "KlusterletAddonConfig",
+                    "name": "cluster-placeholder",
+                },
+                "path": "patches/klusterletaddonconfig.yaml",
+            },
+        ],
+    }
+    if not params.worker_replicas:
+        kustomization["patches"] = [
+            patch for patch in kustomization["patches"]
+            if patch["path"] != "patches/machinepool-worker.yaml"
+        ]
     patches["kustomization.yaml"] = yaml.dump(
-        {
-            "apiVersion": "kustomize.config.k8s.io/v1beta1",
-            "kind": "Kustomization",
-            "namespace": n,
-            "resources": [hive_base_path],
-            "patches": [
-                {"path": "patches/install-config.yaml"},
-                {
-                    "target": {
-                        "kind": "Secret",
-                        "name": "cluster-placeholder-install-config",
-                    },
-                    "path": "patches/install-config-meta.yaml",
-                },
-                {
-                    "target": {"kind": "Namespace", "name": "cluster-placeholder"},
-                    "path": "patches/namespace.yaml",
-                },
-                {
-                    "target": {
-                        "kind": "ClusterDeployment",
-                        "name": "cluster-placeholder",
-                    },
-                    "path": "patches/clusterdeployment.yaml",
-                },
-                {
-                    "target": {
-                        "kind": "MachinePool",
-                        "name": "cluster-placeholder-worker",
-                    },
-                    "path": "patches/machinepool-worker.yaml",
-                },
-                {
-                    "target": {
-                        "kind": "ManagedCluster",
-                        "name": "cluster-placeholder",
-                    },
-                    "path": "patches/managedcluster.yaml",
-                },
-                {
-                    "target": {
-                        "kind": "KlusterletAddonConfig",
-                        "name": "cluster-placeholder",
-                    },
-                    "path": "patches/klusterletaddonconfig.yaml",
-                },
-            ],
-        },
-        default_flow_style=False,
-        sort_keys=False,
+        kustomization, default_flow_style=False, sort_keys=False,
     )
 
     patches["patches/clusterdeployment.yaml"] = yaml.dump(
@@ -152,7 +156,7 @@ def generate_hive_patches(params: ClusterParams, hive_base_path: str = "../base/
         sort_keys=False,
     )
 
-    zones = params.zones or get_default_zones(params.region)
+    zones = params.zones
     install_config = {
         "apiVersion": "v1",
         "baseDomain": params.base_domain,
@@ -239,30 +243,8 @@ def generate_hive_patches(params: ClusterParams, hive_base_path: str = "../base/
         sort_keys=False,
     )
 
-    patches["patches/machinepool-worker.yaml"] = yaml.dump(
-        [
-            {"op": "replace", "path": "/metadata/name", "value": f"{n}-worker"},
-            {"op": "replace", "path": "/metadata/namespace", "value": n},
-            {"op": "replace", "path": "/spec/clusterDeploymentRef/name", "value": n},
-            {
-                "op": "replace",
-                "path": "/spec/platform/aws/type",
-                "value": params.worker_type,
-            },
-            {
-                "op": "replace",
-                "path": "/spec/platform/aws/zones",
-                "value": list(zones),
-            },
-            {
-                "op": "replace",
-                "path": "/spec/replicas",
-                "value": params.worker_replicas,
-            },
-        ],
-        default_flow_style=False,
-        sort_keys=False,
-    )
+    if params.worker_replicas:
+        patches["patches/machinepool-worker.yaml"] = _machinepool_patch(params, params.worker_replicas)
 
     patches["patches/managedcluster.yaml"] = yaml.dump(
         [
@@ -281,6 +263,53 @@ def generate_hive_patches(params: ClusterParams, hive_base_path: str = "../base/
     )
 
     return patches
+
+
+def _machinepool_patch(params: ClusterParams, replicas: int) -> str:
+    n = params.name
+    return yaml.dump(
+        [
+            {"op": "replace", "path": "/metadata/name", "value": f"{n}-worker"},
+            {"op": "replace", "path": "/metadata/namespace", "value": n},
+            {"op": "replace", "path": "/spec/clusterDeploymentRef/name", "value": n},
+            {
+                "op": "replace",
+                "path": "/spec/platform/aws/type",
+                "value": params.worker_type,
+            },
+            {
+                "op": "replace",
+                "path": "/spec/platform/aws/zones",
+                "value": list(params.zones),
+            },
+            {
+                "op": "replace",
+                "path": "/spec/replicas",
+                "value": replicas,
+            },
+        ],
+        default_flow_style=False,
+        sort_keys=False,
+    )
+
+def generate_post_install_patches(params: ClusterParams, base_path: str) -> dict[str, str]:
+    """Render the independently applied worker handoff, when required by policy."""
+    replicas = params.policy.post_install_workers
+    if not replicas:
+        return {}
+    return {
+        "kustomization.yaml": yaml.dump({
+            "apiVersion": "kustomize.config.k8s.io/v1beta1",
+            "kind": "Kustomization",
+            "namespace": params.name,
+            "resources": [base_path],
+            "patches": [{
+                "target": {"kind": "MachinePool", "name": "cluster-placeholder-worker"},
+                "path": "patches/machinepool-worker.yaml",
+            }],
+        }, sort_keys=False),
+        "patches/machinepool-worker.yaml": _machinepool_patch(params, replicas),
+    }
 
 
 # ===================== crossplane patch generation =====================
@@ -425,7 +454,7 @@ def _write(path: str, content: str) -> None:
 
 def write_cluster_dir(base_path: str, params: ClusterParams, cluster_templates_dir: str = "cluster-templates") -> str:
     cluster_dir = os.path.join(base_path, params.name)
-    profile = params.profile or "aws/standard"
+    profile = params.profile
 
     hive_base_path = _resolve_base_resource_path(cluster_dir, "hive", cluster_templates_dir, profile)
     crossplane_base_path = _resolve_base_resource_path(cluster_dir, "crossplane", cluster_templates_dir, profile)
@@ -451,5 +480,20 @@ def write_cluster_dir(base_path: str, params: ClusterParams, cluster_templates_d
 
     for rel_path, content in crossplane_patches.items():
         _write(os.path.join(cluster_dir, "crossplane", rel_path), content)
+
+    post_base = _resolve_base_resource_path(cluster_dir, "post-install", cluster_templates_dir, profile)
+    for rel_path, content in generate_post_install_patches(params, post_base).items():
+        _write(os.path.join(cluster_dir, "post-install", rel_path), content)
+
+    # Remove only obsolete files owned by this generator during profile changes.
+    obsolete = []
+    if not params.worker_replicas:
+        obsolete.append("hive/patches/machinepool-worker.yaml")
+    if not params.policy.post_install_workers:
+        obsolete.extend(["post-install/kustomization.yaml", "post-install/patches/machinepool-worker.yaml"])
+    for rel_path in obsolete:
+        path = os.path.join(cluster_dir, rel_path)
+        if os.path.isfile(path):
+            os.remove(path)
 
     return cluster_dir

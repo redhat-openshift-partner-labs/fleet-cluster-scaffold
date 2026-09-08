@@ -63,7 +63,7 @@ def test_scaffold_writes_and_validates(mock_run, mock_which, tmp_path):
     assert (tmp_path / "test-01" / "kustomization.yaml").exists()
     assert (tmp_path / "test-01" / "hive" / "kustomization.yaml").exists()
     assert (tmp_path / "test-01" / "crossplane" / "kustomization.yaml").exists()
-    assert mock_run.call_count == 2
+    assert mock_run.call_count == 3
 
 
 @mock.patch("scaffold.cli.shutil.which")
@@ -166,7 +166,7 @@ def test_no_skip_validates_kustomize_run(mock_run, default_args):
             [], returncode=0, stdout="", stderr=""
         )
         main(default_args)
-    assert mock_run.call_count == 2
+    assert mock_run.call_count == 3
 
 
 @mock.patch("scaffold.cli.shutil.which")

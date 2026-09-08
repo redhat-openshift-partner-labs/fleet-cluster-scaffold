@@ -159,8 +159,11 @@ def main(args=None) -> int:
     if not check_kustomize():
         return 1
 
-    # Validate each sub-dir
-    for subdir in ["hive", "crossplane"]:
+    # Validate install aggregation and each independent entry point.
+    subdirs = [".", "hive", "crossplane"]
+    if params.policy.post_install_workers:
+        subdirs.append("post-install")
+    for subdir in subdirs:
         path = os.path.join(cluster_dir, subdir)
         result = subprocess.run(
             ["kustomize", "build", path],
