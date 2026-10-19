@@ -493,6 +493,15 @@ def test_azure_scaffold_uses_azure_defaults(tmp_path):
     assert (tmp_path / "az-cluster" / "crossplane" / "patches" / "role-assignment-contributor.yaml").exists()
 
 
+def test_azure_metadata_for_pipeline(tmp_path):
+    main(_azure_args(tmp_path, "az3", "--base-domain-resource-group", "dns-rg"))
+    assert yaml.safe_load((tmp_path / "az3" / "metadata.yaml").read_text()) == {
+        "platform": "azure",
+        "azure-subscription-id": SUB_ID,
+        "azure-dns-resource-group": "dns-rg",
+    }
+
+
 def test_azure_flags_forwarded(tmp_path):
     main(_azure_args(
         tmp_path, "az2",

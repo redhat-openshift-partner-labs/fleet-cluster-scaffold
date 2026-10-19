@@ -85,6 +85,11 @@ class AzureProvider(Provider):
             o.get("cloud_name", "AzurePublicCloud"),
         )
 
+    def metadata(self, params: ClusterParams) -> dict[str, str]:
+        sub, dns_rg, _ = self._opts(params)
+        # Read by the fleet pipeline: osServicePrincipal.json and the Azure DNS-01 ClusterIssuer
+        return {**super().metadata(params), "azure-subscription-id": sub, "azure-dns-resource-group": dns_rg}
+
     def clusterdeployment_ops(self, params: ClusterParams) -> list[dict]:
         _, dns_rg, cloud = self._opts(params)
         return [
