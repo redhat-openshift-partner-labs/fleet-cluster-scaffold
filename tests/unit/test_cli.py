@@ -392,6 +392,61 @@ def test_topology_selects_template_and_replicas(tmp_path):
     assert embedded["compute"][0] == {"name": "worker", "replicas": 0}
 
 
+# ======== AWS credential mode tests ========
+
+
+def _aws_args(tmp_path, name, *extra):
+    (tmp_path / "cluster-templates" / "aws" / "standard").mkdir(parents=True, exist_ok=True)
+    return [
+        "aws", "--name", name, "--region", "us-east-2", "--tier", "base",
+        "--base-path", str(tmp_path),
+        "--cluster-templates-dir", str(tmp_path / "cluster-templates"),
+        "--skip-validation", *extra,
+    ]
+
+
+def _embedded_install_config(cluster_dir):
+    ic = yaml.safe_load((cluster_dir / "hive" / "patches" / "install-config.yaml").read_text())
+    return yaml.safe_load(ic["stringData"]["install-config.yaml"])
+
+
+def test_aws_defaults_to_scoped_credentials(tmp_path):
+    assert main(_aws_args(tmp_path, "sc1")) == 0
+    cluster = tmp_path / "sc1"
+    ic = _embedded_install_config(cluster)
+    assert ic["credentialsMode"] == "Manual"
+    assert ic["platform"]["aws"]["userTags"] == {"openshiftpartnerlabs.com/cluster": "sc1"}
+    assert ic["platform"]["aws"]["propagateUserTags"] is True
+    assert ic["controlPlane"]["platform"]["aws"]["iamRole"] == "sc1-master-role"
+    assert ic["compute"][0]["platform"]["aws"]["iamRole"] == "sc1-worker-role"
+    cd = yaml.safe_load((cluster / "hive" / "patches" / "clusterdeployment.yaml").read_text())
+    assert {"op": "add", "path": "/spec/provisioning/manifestsSecretRef",
+            "value": {"name": "sc1-cloud-credentials-manifests"}} in cd
+    mp = yaml.safe_load((cluster / "hive" / "patches" / "machinepool-worker.yaml").read_text())
+    assert {"op": "add", "path": "/spec/platform/aws/userTags",
+            "value": {"openshiftpartnerlabs.com/cluster": "sc1"}} in mp
+    kust = yaml.safe_load((cluster / "crossplane" / "kustomization.yaml").read_text())
+    assert kust["resources"][0].endswith("aws/standard/crossplane-scoped")
+    assert yaml.safe_load((cluster / "metadata.yaml").read_text()) == {"platform": "aws", "aws-credentials-mode": "scoped"}
+
+
+def test_aws_legacy_flag_keeps_mint_mode(tmp_path, caplog):
+    assert main(_aws_args(tmp_path, "lg1", "--legacy-mint-credentials")) == 0
+    cluster = tmp_path / "lg1"
+    ic = _embedded_install_config(cluster)
+    assert "credentialsMode" not in ic
+    assert "iamRole" not in ic["controlPlane"]["platform"]["aws"]
+    kust = yaml.safe_load((cluster / "crossplane" / "kustomization.yaml").read_text())
+    assert kust["resources"][0].endswith("aws/standard/crossplane")
+    assert yaml.safe_load((cluster / "metadata.yaml").read_text())["aws-credentials-mode"] == "legacy"
+    assert "account-admin" in caplog.text
+
+
+def test_aws_scoped_rejects_names_too_long_for_iam(tmp_path):
+    assert main(_aws_args(tmp_path, "a" * 50)) == 1
+    assert main(_aws_args(tmp_path, "a" * 49)) == 0
+
+
 # ======== Azure tests ========
 
 SUB_ID = "11111111-2222-3333-4444-555555555555"

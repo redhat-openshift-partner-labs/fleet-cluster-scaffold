@@ -89,10 +89,11 @@ def _resolve_base_resource_path(
     subdir: str,
     cluster_templates_dir: str,
     profile: str,
+    base_subdir: str | None = None,
 ) -> str:
-    """Compute the relative path from <cluster_dir>/<subdir>/ to cluster-templates/<profile>/<subdir>."""
+    """Compute the relative path from <cluster_dir>/<subdir>/ to cluster-templates/<profile>/<base_subdir or subdir>."""
     abs_sub = os.path.abspath(os.path.join(cluster_dir, subdir))
-    abs_tpl = os.path.abspath(os.path.join(cluster_templates_dir, profile, subdir))
+    abs_tpl = os.path.abspath(os.path.join(cluster_templates_dir, profile, base_subdir or subdir))
     return os.path.relpath(abs_tpl, abs_sub)
 
 
@@ -109,7 +110,8 @@ def _kustomization(namespace: str, base_path: str, patches: list[dict]) -> str:
 # ===================== hive patch generation =====================
 
 def _install_config(params: ClusterParams) -> dict:
-    cp_platform, worker_platform, platform = get_provider(params.cloud).install_config_platforms(params)
+    provider = get_provider(params.cloud)
+    cp_platform, worker_platform, platform = provider.install_config_platforms(params)
     worker: dict = {"name": "worker"}
     if params.worker_replicas:
         worker["platform"] = worker_platform
@@ -132,6 +134,7 @@ def _install_config(params: ClusterParams) -> dict:
         },
         "platform": platform,
         "publish": "External",
+        **provider.install_config_extra(params),
     }
 
 
@@ -214,7 +217,7 @@ def generate_crossplane_patches(params: ClusterParams, crossplane_base_path: str
 # ===================== metadata generation =====================
 
 def generate_metadata(params: ClusterParams) -> str:
-    meta: dict[str, str] = {}
+    meta = get_provider(params.cloud).metadata(params)
     if params.htpasswd_provider_name:
         meta["htpasswd-provider-name"] = params.htpasswd_provider_name
     return dump(meta)
@@ -233,7 +236,10 @@ def write_cluster_dir(base_path: str, params: ClusterParams, cluster_templates_d
     profile = params.profile
 
     hive_base_path = _resolve_base_resource_path(cluster_dir, "hive", cluster_templates_dir, profile)
-    crossplane_base_path = _resolve_base_resource_path(cluster_dir, "crossplane", cluster_templates_dir, profile)
+    # Overlay dir is always crossplane/; the base dir can differ (e.g. aws crossplane-scoped)
+    crossplane_base_path = _resolve_base_resource_path(
+        cluster_dir, "crossplane", cluster_templates_dir, profile, get_provider(params.cloud).crossplane_base_dir(params)
+    )
 
     top_kustomization = dump({
         "apiVersion": "kustomize.config.k8s.io/v1beta1",

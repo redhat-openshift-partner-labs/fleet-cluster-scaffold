@@ -21,3 +21,10 @@ def params():
         image_set="img4.21.13-x86-64-appsub",
         zones=["us-east-2a", "us-east-2b", "us-east-2c"],
     )
+
+
+@pytest.fixture()
+def legacy_params(params):
+    """AWS params in legacy Mint mode (rollback path)."""
+    params.provider_options = {"credentials_mode": "legacy"}
+    return params

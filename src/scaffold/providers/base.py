@@ -63,6 +63,18 @@ class Provider:
         """Return (controlPlane.platform, compute[worker].platform, platform) for install-config."""
         raise NotImplementedError
 
+    def install_config_extra(self, params: ClusterParams) -> dict[str, Any]:  # pylint: disable=unused-argument
+        """Additional top-level install-config fields (e.g. credentialsMode)."""
+        return {}
+
+    def crossplane_base_dir(self, params: ClusterParams) -> str:  # pylint: disable=unused-argument
+        """cluster-templates/<profile>/ subdirectory holding the Crossplane base."""
+        return "crossplane"
+
+    def metadata(self, params: ClusterParams) -> dict[str, str]:  # pylint: disable=unused-argument
+        """Per-cluster metadata.yaml keys read by the fleet pipelines."""
+        return {"platform": self.name}
+
     def machinepool_ops(self, params: ClusterParams) -> list[dict[str, Any]]:
         """Ops for /spec/platform/<cloud> on the worker MachinePool."""
         raise NotImplementedError

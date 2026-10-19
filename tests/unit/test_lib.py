@@ -171,8 +171,8 @@ class TestGenerateHivePatches:
 
 
 class TestGenerateCrossplanePatches:
-    def test_returns_all_expected_files(self, params):
-        patches = generate_crossplane_patches(params)
+    def test_returns_all_expected_files(self, legacy_params):
+        patches = generate_crossplane_patches(legacy_params)
         expected_files = {
             "kustomization.yaml",
             "patches/user.yaml",
@@ -182,62 +182,62 @@ class TestGenerateCrossplanePatches:
         }
         assert set(patches.keys()) == expected_files
 
-    def test_user_patch_has_name(self, params):
-        patches = generate_crossplane_patches(params)
+    def test_user_patch_has_name(self, legacy_params):
+        patches = generate_crossplane_patches(legacy_params)
         user = yaml.safe_load(patches["patches/user.yaml"])
         assert user[0]["value"] == "my-cluster-ocp-installer"
 
-    def test_policy_patch_has_name(self, params):
-        patches = generate_crossplane_patches(params)
+    def test_policy_patch_has_name(self, legacy_params):
+        patches = generate_crossplane_patches(legacy_params)
         policy = yaml.safe_load(patches["patches/policy.yaml"])
         meta_name = [op for op in policy if op["path"] == "/metadata/name"]
         assert meta_name[0]["value"] == "my-cluster-openshift4installerpolicy"
 
-    def test_kustomization_namespace(self, params):
-        patches = generate_crossplane_patches(params)
+    def test_kustomization_namespace(self, legacy_params):
+        patches = generate_crossplane_patches(legacy_params)
         kust = yaml.safe_load(patches["kustomization.yaml"])
         assert kust["namespace"] == "my-cluster"
 
-    def test_kustomization_uses_custom_base_path(self, params):
-        patches = generate_crossplane_patches(params, crossplane_base_path="../../../cluster-templates/aws/standard/crossplane")
+    def test_kustomization_uses_custom_base_path(self, legacy_params):
+        patches = generate_crossplane_patches(legacy_params, crossplane_base_path="../../../cluster-templates/aws/standard/crossplane")
         kust = yaml.safe_load(patches["kustomization.yaml"])
         assert kust["resources"] == ["../../../cluster-templates/aws/standard/crossplane"]
 
-    def test_kustomization_default_base_path(self, params):
-        patches = generate_crossplane_patches(params)
+    def test_kustomization_default_base_path(self, legacy_params):
+        patches = generate_crossplane_patches(legacy_params)
         kust = yaml.safe_load(patches["kustomization.yaml"])
         assert kust["resources"] == ["../base/crossplane"]
 
-    def test_user_patch_has_namespace(self, params):
-        patches = generate_crossplane_patches(params)
+    def test_user_patch_has_namespace(self, legacy_params):
+        patches = generate_crossplane_patches(legacy_params)
         user = yaml.safe_load(patches["patches/user.yaml"])
         ns_ops = [op for op in user if op["path"] == "/metadata/namespace"]
         assert len(ns_ops) == 1
         assert ns_ops[0]["value"] == "my-cluster"
 
-    def test_policy_patch_has_namespace(self, params):
-        patches = generate_crossplane_patches(params)
+    def test_policy_patch_has_namespace(self, legacy_params):
+        patches = generate_crossplane_patches(legacy_params)
         policy = yaml.safe_load(patches["patches/policy.yaml"])
         ns_ops = [op for op in policy if op["path"] == "/metadata/namespace"]
         assert len(ns_ops) == 1
         assert ns_ops[0]["value"] == "my-cluster"
 
-    def test_policy_attachment_patch_has_namespace(self, params):
-        patches = generate_crossplane_patches(params)
+    def test_policy_attachment_patch_has_namespace(self, legacy_params):
+        patches = generate_crossplane_patches(legacy_params)
         pa = yaml.safe_load(patches["patches/policy-attachment.yaml"])
         ns_ops = [op for op in pa if op["path"] == "/metadata/namespace"]
         assert len(ns_ops) == 1
         assert ns_ops[0]["value"] == "my-cluster"
 
-    def test_access_key_patch_has_namespace(self, params):
-        patches = generate_crossplane_patches(params)
+    def test_access_key_patch_has_namespace(self, legacy_params):
+        patches = generate_crossplane_patches(legacy_params)
         ak = yaml.safe_load(patches["patches/access-key.yaml"])
         ns_ops = [op for op in ak if op["path"] == "/metadata/namespace"]
         assert len(ns_ops) == 1
         assert ns_ops[0]["value"] == "my-cluster"
 
-    def test_access_key_namespace(self, params):
-        patches = generate_crossplane_patches(params)
+    def test_access_key_namespace(self, legacy_params):
+        patches = generate_crossplane_patches(legacy_params)
         ak = yaml.safe_load(patches["patches/access-key.yaml"])
         ns_ops = [
             op
@@ -251,10 +251,10 @@ class TestGenerateCrossplanePatches:
 
 
 class TestWriteClusterDir:
-    def test_creates_all_files(self, params, tmp_path):
+    def test_creates_all_files(self, legacy_params, tmp_path):
         tpl_dir = tmp_path / "cluster-templates"
         tpl_dir.mkdir()
-        write_cluster_dir(str(tmp_path), params, str(tpl_dir))
+        write_cluster_dir(str(tmp_path), legacy_params, str(tpl_dir))
         cluster_dir = tmp_path / "my-cluster"
         assert (cluster_dir / "kustomization.yaml").exists()
         assert (cluster_dir / "hive" / "kustomization.yaml").exists()
@@ -380,10 +380,10 @@ class TestResolveBaseResourcePath:
 
 
 class TestGenerateMetadata:
-    def test_empty_when_no_htpasswd(self):
+    def test_platform_keys_when_no_htpasswd(self):
         params = ClusterParams(name="m", region="us-east-1", tier="base")
         result = yaml.safe_load(generate_metadata(params))
-        assert result == {}
+        assert result == {"platform": "aws", "aws-credentials-mode": "scoped"}
 
     def test_includes_htpasswd_when_set(self):
         params = ClusterParams(
@@ -672,3 +672,37 @@ class TestAzureValidation:
         azure_params.provider_options["subscription_id"] = "nope"
         with pytest.raises(ValueError, match="UUID"):
             get_provider("azure").validate(azure_params)
+
+
+# ===================== repo template consistency =====================
+
+REPO_TEMPLATES = os.path.join(os.path.dirname(__file__), "..", "..", "cluster-templates")
+
+
+def _template_resources(path):
+    """(kind, name) of every resource in a base directory's kustomization."""
+    found = set()
+    kust = yaml.safe_load(open(os.path.join(path, "kustomization.yaml"), encoding="utf-8"))
+    for res in kust["resources"]:
+        with open(os.path.join(path, res), encoding="utf-8") as fh:
+            for d in yaml.safe_load_all(fh):
+                if d:
+                    found.add((d["kind"], d["metadata"]["name"]))
+    return found
+
+
+class TestScopedTemplatesMatchPatches:
+    @pytest.mark.parametrize("topology", ["standard", "compact", "sno"])
+    def test_every_patch_target_exists_in_base(self, topology):
+        p = ClusterParams(name="t1", region="us-east-2", tier="base", topology=topology)
+        kust = yaml.safe_load(generate_crossplane_patches(p)["kustomization.yaml"])
+        targets = {(e["target"]["kind"], e["target"]["name"]) for e in kust["patches"]}
+        base = _template_resources(os.path.join(REPO_TEMPLATES, "aws", topology, "crossplane-scoped"))
+        assert targets == base
+
+    @pytest.mark.parametrize("topology", ["standard", "compact", "sno"])
+    def test_legacy_patch_targets_exist_in_legacy_base(self, topology, legacy_params):
+        legacy_params.topology = topology
+        kust = yaml.safe_load(generate_crossplane_patches(legacy_params)["kustomization.yaml"])
+        targets = {(e["target"]["kind"], e["target"]["name"]) for e in kust["patches"]}
+        assert targets <= _template_resources(os.path.join(REPO_TEMPLATES, "aws", topology, "crossplane"))
