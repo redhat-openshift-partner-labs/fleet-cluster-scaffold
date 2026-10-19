@@ -1,0 +1,62 @@
+# CredentialsRequest openshift-image-registry -> openshift-image-registry/installer-cloud-credentials (delivered by Hive manifestsSecretRef).
+apiVersion: iam.aws.upbound.io/v1beta1
+kind: User
+metadata:
+  name: cluster-placeholder-image-registry
+  namespace: cluster-placeholder
+spec:
+  forProvider:
+    tags:
+      Purpose: OpenShift-image-registry
+      CreatedBy: Crossplane
+      Product: OpenShift
+      openshiftpartnerlabs.com/cluster: cluster-placeholder
+  providerConfigRef:
+    name: default
+---
+# Placeholder denies everything; the cluster overlay replaces it with the scoped policy.
+apiVersion: iam.aws.upbound.io/v1beta1
+kind: Policy
+metadata:
+  name: cluster-placeholder-image-registry-policy
+  namespace: cluster-placeholder
+spec:
+  forProvider:
+    description: "OpenShift-image-registry (cluster-scoped)"
+    policy: '{"Version":"2012-10-17","Statement":[{"Effect":"Deny","Action":"*","Resource":"*"}]}'
+    tags:
+      Purpose: OpenShift-image-registry
+      CreatedBy: Crossplane
+      Product: OpenShift
+      openshiftpartnerlabs.com/cluster: cluster-placeholder
+  providerConfigRef:
+    name: default
+---
+apiVersion: iam.aws.upbound.io/v1beta1
+kind: UserPolicyAttachment
+metadata:
+  name: cluster-placeholder-image-registry-attachment
+  namespace: cluster-placeholder
+spec:
+  forProvider:
+    policyArnRef:
+      name: cluster-placeholder-image-registry-policy
+    userRef:
+      name: cluster-placeholder-image-registry
+  providerConfigRef:
+    name: default
+---
+apiVersion: iam.aws.upbound.io/v1beta1
+kind: AccessKey
+metadata:
+  name: cluster-placeholder-image-registry-access-key
+  namespace: cluster-placeholder
+spec:
+  forProvider:
+    userRef:
+      name: cluster-placeholder-image-registry
+  providerConfigRef:
+    name: default
+  writeConnectionSecretToRef:
+    name: cluster-placeholder-image-registry-credentials-raw
+    namespace: cluster-placeholder

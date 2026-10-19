@@ -1,0 +1,62 @@
+# CredentialsRequest cloud-credential-operator-iam-ro -> openshift-cloud-credential-operator/cloud-credential-operator-iam-ro-creds (delivered by Hive manifestsSecretRef).
+apiVersion: iam.aws.upbound.io/v1beta1
+kind: User
+metadata:
+  name: cluster-placeholder-cco-iam-ro
+  namespace: cluster-placeholder
+spec:
+  forProvider:
+    tags:
+      Purpose: OpenShift-cco-iam-ro
+      CreatedBy: Crossplane
+      Product: OpenShift
+      openshiftpartnerlabs.com/cluster: cluster-placeholder
+  providerConfigRef:
+    name: default
+---
+# Placeholder denies everything; the cluster overlay replaces it with the scoped policy.
+apiVersion: iam.aws.upbound.io/v1beta1
+kind: Policy
+metadata:
+  name: cluster-placeholder-cco-iam-ro-policy
+  namespace: cluster-placeholder
+spec:
+  forProvider:
+    description: "OpenShift-cco-iam-ro (cluster-scoped)"
+    policy: '{"Version":"2012-10-17","Statement":[{"Effect":"Deny","Action":"*","Resource":"*"}]}'
+    tags:
+      Purpose: OpenShift-cco-iam-ro
+      CreatedBy: Crossplane
+      Product: OpenShift
+      openshiftpartnerlabs.com/cluster: cluster-placeholder
+  providerConfigRef:
+    name: default
+---
+apiVersion: iam.aws.upbound.io/v1beta1
+kind: UserPolicyAttachment
+metadata:
+  name: cluster-placeholder-cco-iam-ro-attachment
+  namespace: cluster-placeholder
+spec:
+  forProvider:
+    policyArnRef:
+      name: cluster-placeholder-cco-iam-ro-policy
+    userRef:
+      name: cluster-placeholder-cco-iam-ro
+  providerConfigRef:
+    name: default
+---
+apiVersion: iam.aws.upbound.io/v1beta1
+kind: AccessKey
+metadata:
+  name: cluster-placeholder-cco-iam-ro-access-key
+  namespace: cluster-placeholder
+spec:
+  forProvider:
+    userRef:
+      name: cluster-placeholder-cco-iam-ro
+  providerConfigRef:
+    name: default
+  writeConnectionSecretToRef:
+    name: cluster-placeholder-cco-iam-ro-credentials-raw
+    namespace: cluster-placeholder

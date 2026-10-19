@@ -1,0 +1,38 @@
+# BYO node roles (install-config iamRole); the installer wraps them in <infraID>-{master,worker}-profile.
+apiVersion: iam.aws.upbound.io/v1beta1
+kind: Role
+metadata:
+  name: cluster-placeholder-master-role
+  namespace: cluster-placeholder
+spec:
+  forProvider:
+    assumeRolePolicy: '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"ec2.amazonaws.com"},"Action":"sts:AssumeRole"}]}'
+    inlinePolicy:
+      - name: cluster-placeholder-master-policy
+        policy: '{"Version":"2012-10-17","Statement":[{"Effect":"Deny","Action":"*","Resource":"*"}]}'
+    tags:
+      Purpose: OpenShift-Master-Node
+      CreatedBy: Crossplane
+      Product: OpenShift
+      openshiftpartnerlabs.com/cluster: cluster-placeholder
+  providerConfigRef:
+    name: default
+---
+apiVersion: iam.aws.upbound.io/v1beta1
+kind: Role
+metadata:
+  name: cluster-placeholder-worker-role
+  namespace: cluster-placeholder
+spec:
+  forProvider:
+    assumeRolePolicy: '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"ec2.amazonaws.com"},"Action":"sts:AssumeRole"}]}'
+    inlinePolicy:
+      - name: cluster-placeholder-worker-policy
+        policy: '{"Version":"2012-10-17","Statement":[{"Effect":"Deny","Action":"*","Resource":"*"}]}'
+    tags:
+      Purpose: OpenShift-Worker-Node
+      CreatedBy: Crossplane
+      Product: OpenShift
+      openshiftpartnerlabs.com/cluster: cluster-placeholder
+  providerConfigRef:
+    name: default

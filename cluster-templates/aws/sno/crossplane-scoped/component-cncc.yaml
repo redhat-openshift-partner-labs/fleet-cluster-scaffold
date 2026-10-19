@@ -1,0 +1,62 @@
+# CredentialsRequest openshift-cloud-network-config-controller-aws -> openshift-cloud-network-config-controller/cloud-credentials (delivered by Hive manifestsSecretRef).
+apiVersion: iam.aws.upbound.io/v1beta1
+kind: User
+metadata:
+  name: cluster-placeholder-cncc
+  namespace: cluster-placeholder
+spec:
+  forProvider:
+    tags:
+      Purpose: OpenShift-cncc
+      CreatedBy: Crossplane
+      Product: OpenShift
+      openshiftpartnerlabs.com/cluster: cluster-placeholder
+  providerConfigRef:
+    name: default
+---
+# Placeholder denies everything; the cluster overlay replaces it with the scoped policy.
+apiVersion: iam.aws.upbound.io/v1beta1
+kind: Policy
+metadata:
+  name: cluster-placeholder-cncc-policy
+  namespace: cluster-placeholder
+spec:
+  forProvider:
+    description: "OpenShift-cncc (cluster-scoped)"
+    policy: '{"Version":"2012-10-17","Statement":[{"Effect":"Deny","Action":"*","Resource":"*"}]}'
+    tags:
+      Purpose: OpenShift-cncc
+      CreatedBy: Crossplane
+      Product: OpenShift
+      openshiftpartnerlabs.com/cluster: cluster-placeholder
+  providerConfigRef:
+    name: default
+---
+apiVersion: iam.aws.upbound.io/v1beta1
+kind: UserPolicyAttachment
+metadata:
+  name: cluster-placeholder-cncc-attachment
+  namespace: cluster-placeholder
+spec:
+  forProvider:
+    policyArnRef:
+      name: cluster-placeholder-cncc-policy
+    userRef:
+      name: cluster-placeholder-cncc
+  providerConfigRef:
+    name: default
+---
+apiVersion: iam.aws.upbound.io/v1beta1
+kind: AccessKey
+metadata:
+  name: cluster-placeholder-cncc-access-key
+  namespace: cluster-placeholder
+spec:
+  forProvider:
+    userRef:
+      name: cluster-placeholder-cncc
+  providerConfigRef:
+    name: default
+  writeConnectionSecretToRef:
+    name: cluster-placeholder-cncc-credentials-raw
+    namespace: cluster-placeholder

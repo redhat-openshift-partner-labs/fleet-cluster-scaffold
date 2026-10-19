@@ -1,0 +1,63 @@
+# Installer credential (hub only: credentialsMode Manual never copies it to the spoke).
+# Names match the legacy crossplane/ base so existing pipeline tasks keep working.
+apiVersion: iam.aws.upbound.io/v1beta1
+kind: User
+metadata:
+  name: cluster-placeholder-ocp-installer
+  namespace: cluster-placeholder
+spec:
+  forProvider:
+    tags:
+      Purpose: OpenShift-Installer
+      CreatedBy: Crossplane
+      Product: OpenShift
+      openshiftpartnerlabs.com/cluster: cluster-placeholder
+  providerConfigRef:
+    name: default
+---
+# Placeholder denies everything; the cluster overlay replaces it with the scoped policy.
+apiVersion: iam.aws.upbound.io/v1beta1
+kind: Policy
+metadata:
+  name: cluster-placeholder-openshift4installerpolicy
+  namespace: cluster-placeholder
+spec:
+  forProvider:
+    description: "OpenShift-Installer (cluster-scoped)"
+    policy: '{"Version":"2012-10-17","Statement":[{"Effect":"Deny","Action":"*","Resource":"*"}]}'
+    tags:
+      Purpose: OpenShift-Installer
+      CreatedBy: Crossplane
+      Product: OpenShift
+      openshiftpartnerlabs.com/cluster: cluster-placeholder
+  providerConfigRef:
+    name: default
+---
+apiVersion: iam.aws.upbound.io/v1beta1
+kind: UserPolicyAttachment
+metadata:
+  name: cluster-placeholder-policy-attachment
+  namespace: cluster-placeholder
+spec:
+  forProvider:
+    policyArnRef:
+      name: cluster-placeholder-openshift4installerpolicy
+    userRef:
+      name: cluster-placeholder-ocp-installer
+  providerConfigRef:
+    name: default
+---
+apiVersion: iam.aws.upbound.io/v1beta1
+kind: AccessKey
+metadata:
+  name: cluster-placeholder-access-key
+  namespace: cluster-placeholder
+spec:
+  forProvider:
+    userRef:
+      name: cluster-placeholder-ocp-installer
+  providerConfigRef:
+    name: default
+  writeConnectionSecretToRef:
+    name: aws-credentials-raw
+    namespace: cluster-placeholder

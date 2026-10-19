@@ -1,0 +1,12 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - installer.yaml
+  - node-roles.yaml
+  - component-machine-api.yaml
+  - component-cco-iam-ro.yaml
+  - component-image-registry.yaml
+  - component-ingress.yaml
+  - component-cncc.yaml
+  - component-ebs-csi.yaml
