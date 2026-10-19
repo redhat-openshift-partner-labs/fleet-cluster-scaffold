@@ -12,6 +12,13 @@ resources owned by its cluster:
   resource by tagging it
 - S3: buckets prefixed with the infra prefix; Route53: records under *.apps.<cluster>.<domain>
 
+The installer's infra ID and VPC are unknown until install, so policies carry
+INFRA_ID_PLACEHOLDER / VPC_ID_PLACEHOLDER, which match nothing (fail closed) until the fleet
+pipeline substitutes the real values after install. That enables a second ownership key,
+kubernetes.io/cluster/<infraID>=owned, which machine-api, EBS CSI and the cloud-controller-manager
+always apply at create time (so partner LoadBalancer Services need no annotation), and limits
+egress-IP ENI changes to the cluster VPC.
+
 Operator actions mirror the OCP 4.20/4.21 AWS CredentialsRequests
 (`oc adm release extract --credentials-requests --cloud=aws --included`). Re-diff on every OCP
 minor upgrade.
@@ -25,6 +32,11 @@ from dataclasses import dataclass
 from typing import Any
 
 TAG_KEY = "openshiftpartnerlabs.com/cluster"
+
+# Substituted post-install by the fleet pipeline (scope-aws-credentials task)
+INFRA_ID_PLACEHOLDER = "INFRA_ID_PLACEHOLDER"
+VPC_ID_PLACEHOLDER = "VPC_ID_PLACEHOLDER"
+CLUSTER_TAG = f"kubernetes.io/cluster/{INFRA_ID_PLACEHOLDER}"
 
 # installer: maxLen 27 - (randomLen 5 + 1); pkg/asset/installconfig/clusterid.go
 _INFRA_BASE_MAX = 21
@@ -52,6 +64,8 @@ COMPONENTS: tuple[Component, ...] = (
 # Longest IAM name suffix appended to the cluster name; IAM user/role names are capped at 64.
 MAX_NAME_SUFFIX = max(len(f"-{c.key}") for c in COMPONENTS)
 IAM_NAME_MAX = 64
+MANAGED_POLICY_MAX = 6144  # operator users (managed policies)
+INLINE_ROLE_POLICY_MAX = 10240  # node roles (inline policies)
 
 
 def infra_prefix(cluster_name: str) -> str:
@@ -75,6 +89,13 @@ def _stmt(sid: str, actions: list[str], resources: str | list[str] = "*", condit
     if condition:
         st["Condition"] = condition
     return st
+
+
+def _owned(sid: str, actions: list[str], resources: str | list[str], conditions: tuple[dict, dict],
+           extra: dict | None = None) -> list[dict[str, Any]]:
+    """One statement per ownership key; IAM ANDs keys within a condition, so OR needs two statements."""
+    return [_stmt(f"{sid}{suffix}", actions, resources, {**(extra or {}), **cond})
+            for suffix, cond in zip(("", "ByClusterTag"), conditions)]
 
 
 def _ec2(resource: str) -> str:
@@ -101,6 +122,11 @@ class _Scope:
         # aws:ResourceTag: supported by both classic ELB and ELBv2 actions
         self.elb_owned = {"StringEquals": {f"aws:ResourceTag/{TAG_KEY}": name}}
         self.request_tag = {"StringEquals": {f"aws:RequestTag/{TAG_KEY}": name}}
+        # Either ownership key: the scaffold tag, or the installer/operator cluster tag
+        self.ec2_owned_any = (self.ec2_owned, {"StringEquals": {f"ec2:ResourceTag/{CLUSTER_TAG}": "owned"}})
+        self.elb_owned_any = (self.elb_owned, {"StringEquals": {f"aws:ResourceTag/{CLUSTER_TAG}": "owned"}})
+        self.request_tag_any = (self.request_tag, {"StringEquals": {f"aws:RequestTag/{CLUSTER_TAG}": "owned"}})
+        self.own_vpc = {"ArnLike": {"ec2:Vpc": f"arn:aws:ec2:*:*:vpc/{VPC_ID_PLACEHOLDER}"}}
 
     def ec2_create_action(self, *actions: str) -> dict:
         return {"StringEquals": {"ec2:CreateAction": list(actions)}}
@@ -129,10 +155,9 @@ def _machine_api(s: _Scope) -> dict:
             "elasticloadbalancing:DescribeTargetHealth",
         ]),
         # Launch only cluster-profile instances that carry the ownership tag...
-        _stmt("RunOwnedInstance", ["ec2:RunInstances"], _ec2("instance"),
-              {**s.own_profile, **s.request_tag}),
+        *_owned("RunOwnedInstance", ["ec2:RunInstances"], _ec2("instance"), s.request_tag_any, s.own_profile),
         # ...into the cluster's own subnets and security groups
-        _stmt("RunInOwnedNetwork", ["ec2:RunInstances"], [_ec2("subnet"), _ec2("security-group")], s.ec2_owned),
+        *_owned("RunInOwnedNetwork", ["ec2:RunInstances"], [_ec2("subnet"), _ec2("security-group")], s.ec2_owned_any),
         _stmt("RunSupporting", ["ec2:RunInstances"], [
             _ec2("image"), _ec2("volume"), _ec2("network-interface"), _ec2("key-pair"), _ec2("snapshot"),
             _ec2("launch-template"), _ec2("placement-group"),
@@ -144,9 +169,10 @@ def _machine_api(s: _Scope) -> dict:
         _stmt("PassNodeRoles", ["iam:PassRole"], s.roles, {"StringEquals": {"iam:PassedToService": "ec2.amazonaws.com"}}),
         _stmt("SpotServiceLinkedRole", ["iam:CreateServiceLinkedRole"], "arn:aws:iam::*:role/aws-service-role/*",
               {"StringEquals": {"iam:AWSServiceName": "spot.amazonaws.com"}}),
-        _stmt("RegisterOwnedLB", ["elasticloadbalancing:RegisterInstancesWithLoadBalancer"], _elb("loadbalancer"), s.elb_owned),
-        _stmt("RegisterOwnedTargets", ["elasticloadbalancing:RegisterTargets", "elasticloadbalancing:DeregisterTargets"],
-              _elb("targetgroup"), s.elb_owned),
+        *_owned("RegisterOwnedLB", ["elasticloadbalancing:RegisterInstancesWithLoadBalancer"], _elb("loadbalancer"),
+                s.elb_owned_any),
+        *_owned("RegisterOwnedTargets", ["elasticloadbalancing:RegisterTargets", "elasticloadbalancing:DeregisterTargets"],
+                _elb("targetgroup"), s.elb_owned_any),
         *s.kms("MachineAPI"),
     )
 
@@ -177,14 +203,14 @@ def _ingress(s: _Scope) -> dict:
     )
 
 
-def _cncc(s: _Scope) -> dict:  # pylint: disable=unused-argument
-    # Residual: node ENIs carry no ownership tag and the VPC ID is unknown before install,
-    # so IP assignment stays unscoped (disruption only; no data access or escalation).
+def _cncc(s: _Scope) -> dict:
+    # Node ENIs carry no ownership tag (machine-api tags only instances and volumes), so egress-IP
+    # changes are limited to the cluster VPC once the pipeline substitutes VPC_ID_PLACEHOLDER.
     return _doc(
         _stmt("Read", ["ec2:DescribeInstances", "ec2:DescribeInstanceStatus", "ec2:DescribeInstanceTypes",
                        "ec2:DescribeSubnets", "ec2:DescribeNetworkInterfaces"]),
         _stmt("EgressIPs", ["ec2:AssignPrivateIpAddresses", "ec2:UnassignPrivateIpAddresses",
-                            "ec2:AssignIpv6Addresses", "ec2:UnassignIpv6Addresses"], _ec2("network-interface")),
+                            "ec2:AssignIpv6Addresses", "ec2:UnassignIpv6Addresses"], _ec2("network-interface"), s.own_vpc),
     )
 
 
@@ -193,12 +219,13 @@ def _ebs_csi(s: _Scope) -> dict:
         _stmt("Read", ["ec2:DescribeInstances", "ec2:DescribeSnapshots", "ec2:DescribeTags", "ec2:DescribeVolumes",
                        "ec2:DescribeVolumesModifications", "ec2:DescribeAvailabilityZones"]),
         *_volume_statements(s, "CSI"),
-        _stmt("CreateOwnedSnapshot", ["ec2:CreateSnapshot"], _ec2("snapshot"), s.request_tag),
-        _stmt("SnapshotOwnedVolume", ["ec2:CreateSnapshot"], _ec2("volume"), s.ec2_owned),
-        _stmt("ManageOwnedSnapshots", ["ec2:DeleteSnapshot", "ec2:EnableFastSnapshotRestores"], _ec2("snapshot"), s.ec2_owned),
+        *_owned("CreateOwnedSnapshot", ["ec2:CreateSnapshot"], _ec2("snapshot"), s.request_tag_any),
+        *_owned("SnapshotOwnedVolume", ["ec2:CreateSnapshot"], _ec2("volume"), s.ec2_owned_any),
+        *_owned("ManageOwnedSnapshots", ["ec2:DeleteSnapshot", "ec2:EnableFastSnapshotRestores"], _ec2("snapshot"),
+                s.ec2_owned_any),
         _stmt("TagOnCreate", ["ec2:CreateTags"], [_ec2("volume"), _ec2("snapshot")],
               s.ec2_create_action("CreateVolume", "CreateSnapshot")),
-        _stmt("TagOwned", ["ec2:CreateTags", "ec2:DeleteTags"], [_ec2("volume"), _ec2("snapshot")], s.ec2_owned),
+        *_owned("TagOwned", ["ec2:CreateTags", "ec2:DeleteTags"], [_ec2("volume"), _ec2("snapshot")], s.ec2_owned_any),
         *s.kms("CSI"),
     )
 
@@ -206,10 +233,10 @@ def _ebs_csi(s: _Scope) -> dict:
 def _volume_statements(s: _Scope, sid: str) -> list[dict[str, Any]]:
     """EBS volume lifecycle, one statement per resource type (AttachVolume authorizes instance and volume)."""
     return [
-        _stmt(f"{sid}CreateOwnedVolume", ["ec2:CreateVolume"], _ec2("volume"), s.request_tag),
-        _stmt(f"{sid}VolumeFromOwnedSnapshot", ["ec2:CreateVolume"], _ec2("snapshot"), s.ec2_owned),
-        _stmt(f"{sid}ManageOwnedVolumes", ["ec2:AttachVolume", "ec2:DetachVolume", "ec2:DeleteVolume", "ec2:ModifyVolume"],
-              _ec2("volume"), s.ec2_owned),
+        *_owned(f"{sid}CreateOwnedVolume", ["ec2:CreateVolume"], _ec2("volume"), s.request_tag_any),
+        *_owned(f"{sid}VolumeFromOwnedSnapshot", ["ec2:CreateVolume"], _ec2("snapshot"), s.ec2_owned_any),
+        *_owned(f"{sid}ManageOwnedVolumes", ["ec2:AttachVolume", "ec2:DetachVolume", "ec2:DeleteVolume", "ec2:ModifyVolume"],
+                _ec2("volume"), s.ec2_owned_any),
         _stmt(f"{sid}AttachToOwnedInstances", ["ec2:AttachVolume", "ec2:DetachVolume"], _ec2("instance"), s.own_profile),
     ]
 
@@ -236,22 +263,23 @@ def master_role_policy(name: str, region: str, base_domain: str) -> dict:
     lb_resources = [_elb("loadbalancer"), _elb("targetgroup"), _elb("listener"), _elb("listener-rule")]
     return _doc(
         _stmt("Read", ["ec2:Describe*", "elasticloadbalancing:Describe*", "kms:DescribeKey"]),
-        _stmt("CreateSGInOwnedVpc", ["ec2:CreateSecurityGroup"], _ec2("vpc"), s.ec2_owned),
-        _stmt("CreateOwnedSG", ["ec2:CreateSecurityGroup"], _ec2("security-group"), s.request_tag),
-        _stmt("ManageOwnedSG", ["ec2:AuthorizeSecurityGroupIngress", "ec2:RevokeSecurityGroupIngress", "ec2:DeleteSecurityGroup"],
-              _ec2("security-group"), s.ec2_owned),
+        *_owned("CreateSGInOwnedVpc", ["ec2:CreateSecurityGroup"], _ec2("vpc"), s.ec2_owned_any),
+        *_owned("CreateOwnedSG", ["ec2:CreateSecurityGroup"], _ec2("security-group"), s.request_tag_any),
+        *_owned("ManageOwnedSG", ["ec2:AuthorizeSecurityGroupIngress", "ec2:RevokeSecurityGroupIngress", "ec2:DeleteSecurityGroup"],
+                _ec2("security-group"), s.ec2_owned_any),
         _stmt("SGRules", ["ec2:AuthorizeSecurityGroupIngress"], _ec2("security-group-rule")),
         _stmt("ModifyOwnedInstance", ["ec2:ModifyInstanceAttribute"], _ec2("instance"), s.own_profile),
-        _stmt("ModifyInstanceOwnedSGVolume", ["ec2:ModifyInstanceAttribute"], [_ec2("security-group"), _ec2("volume")], s.ec2_owned),
+        *_owned("ModifyInstanceOwnedSGVolume", ["ec2:ModifyInstanceAttribute"], [_ec2("security-group"), _ec2("volume")],
+                s.ec2_owned_any),
         *_volume_statements(s, "Node"),
         _stmt("TagOnCreate", ["ec2:CreateTags"], [_ec2("security-group"), _ec2("volume")],
               s.ec2_create_action("CreateSecurityGroup", "CreateVolume")),
-        _stmt("TagOwned", ["ec2:CreateTags"], [_ec2("security-group"), _ec2("volume")], s.ec2_owned),
-        _stmt("CreateOwnedLB", ["elasticloadbalancing:CreateLoadBalancer", "elasticloadbalancing:CreateTargetGroup"],
-              [_elb("loadbalancer"), _elb("targetgroup")], s.request_tag),
+        *_owned("TagOwned", ["ec2:CreateTags"], [_ec2("security-group"), _ec2("volume")], s.ec2_owned_any),
+        *_owned("CreateOwnedLB", ["elasticloadbalancing:CreateLoadBalancer", "elasticloadbalancing:CreateTargetGroup"],
+                [_elb("loadbalancer"), _elb("targetgroup")], s.request_tag_any),
         _stmt("ELBTagOnCreate", ["elasticloadbalancing:AddTags"], lb_resources,
               {"StringEquals": {"elasticloadbalancing:CreateAction": ["CreateLoadBalancer", "CreateTargetGroup", "CreateListener", "CreateRule"]}}),
-        _stmt("ManageOwnedLB", [
+        *_owned("ManageOwnedLB", [
             "elasticloadbalancing:AddTags", "elasticloadbalancing:AttachLoadBalancerToSubnets",
             "elasticloadbalancing:ApplySecurityGroupsToLoadBalancer", "elasticloadbalancing:CreateListener",
             "elasticloadbalancing:CreateLoadBalancerPolicy", "elasticloadbalancing:CreateLoadBalancerListeners",
@@ -264,7 +292,7 @@ def master_role_policy(name: str, region: str, base_domain: str) -> dict:
             "elasticloadbalancing:RegisterInstancesWithLoadBalancer", "elasticloadbalancing:RegisterTargets",
             "elasticloadbalancing:SetLoadBalancerPoliciesForBackendServer",
             "elasticloadbalancing:SetLoadBalancerPoliciesOfListener", "elasticloadbalancing:SetSecurityGroups",
-        ], lb_resources, s.elb_owned),
+        ], lb_resources, s.elb_owned_any),
     )
 
 

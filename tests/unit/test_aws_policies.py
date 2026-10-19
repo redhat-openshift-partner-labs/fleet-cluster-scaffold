@@ -17,11 +17,6 @@ FIXTURES = pathlib.Path(__file__).parent.parent / "fixtures" / "credentialsreque
 INTENTIONALLY_DROPPED = {
     "openshift-ingress": {"sts:AssumeRole"},  # only for shared-VPC hostedZoneRole, which fleet doesn't use
 }
-# Actions that stay unscoped on purpose (documented residual)
-UNSCOPED_ALLOWED = {
-    "ec2:AssignPrivateIpAddresses", "ec2:UnassignPrivateIpAddresses",
-    "ec2:AssignIpv6Addresses", "ec2:UnassignIpv6Addresses",
-}
 # Mutating action verbs that must never be allowed account-wide on the spoke
 MUTATING = ("Terminate", "Delete", "Detach", "Attach", "Modify", "Revoke", "Authorize", "Deregister",
             "Register", "Set", "Put", "Create", "Run", "Assign", "Unassign", "Change", "Pass", "Enable",
@@ -92,11 +87,11 @@ class TestSpokeInvariants:
 
     @pytest.mark.parametrize("label,doc", _spoke_policies().items())
     def test_mutating_actions_are_scoped(self, label, doc):
-        """No mutating action on Resource '*' without a condition (except documented residuals)."""
+        """No mutating action on Resource '*' without a condition."""
         for st in _statements(doc):
             for a in _as_list(st["Action"]):
                 verb = a.split(":")[1]
-                if not verb.startswith(MUTATING) or a in UNSCOPED_ALLOWED:
+                if not verb.startswith(MUTATING):
                     continue
                 assert st.get("Condition") or st["Resource"] != "*", f"{label}/{st['Sid']}: {a} is unscoped"
 
@@ -135,8 +130,36 @@ class TestSpokeInvariants:
         assert names == [f"*.apps.{NAME}.{DOMAIN}", f"apps.{NAME}.{DOMAIN}"]
 
     @pytest.mark.parametrize("label,doc", _spoke_policies().items())
-    def test_fits_managed_policy_size_limit(self, label, doc):
-        assert len(pol.render(doc)) <= 6144, label
+    def test_fits_policy_size_limit(self, label, doc):
+        limit = pol.INLINE_ROLE_POLICY_MAX if label.endswith("-role") else pol.MANAGED_POLICY_MAX
+        assert len(pol.render(doc)) <= limit, label
+
+    @pytest.mark.parametrize("label,doc", _spoke_policies().items())
+    def test_every_scaffold_tag_check_has_cluster_tag_twin(self, label, doc):
+        """Post-install, resources tagged only kubernetes.io/cluster/<infraID> (CCM, CSI) stay manageable."""
+        by_sid = {st["Sid"]: st for st in _statements(doc)}
+        for sid, st in by_sid.items():
+            if pol.TAG_KEY not in json.dumps(st.get("Condition", {})):
+                continue
+            twin = by_sid.get(f"{sid}ByClusterTag")
+            assert twin, f"{label}/{sid} has no ByClusterTag twin"
+            assert (twin["Action"], twin["Resource"]) == (st["Action"], st["Resource"])
+            cond = json.dumps(twin["Condition"])
+            assert pol.CLUSTER_TAG in cond and pol.TAG_KEY not in cond
+            # Non-tag conditions (e.g. instance profile) are kept on both
+            assert {k for k in st["Condition"] if k != "StringEquals"} == {k for k in twin["Condition"] if k != "StringEquals"}
+
+    def test_egress_ip_changes_limited_to_cluster_vpc(self):
+        doc = pol.component_policy("cncc", NAME, REGION, DOMAIN)
+        st = next(s for s in _statements(doc) if s["Sid"] == "EgressIPs")
+        assert st["Condition"] == {"ArnLike": {"ec2:Vpc": f"arn:aws:ec2:*:*:vpc/{pol.VPC_ID_PLACEHOLDER}"}}
+
+    def test_placeholders_fail_closed_until_substituted(self):
+        """Placeholders are literal values that cannot match a real infra ID or VPC ID."""
+        assert pol.INFRA_ID_PLACEHOLDER == "INFRA_ID_PLACEHOLDER"
+        assert pol.VPC_ID_PLACEHOLDER == "VPC_ID_PLACEHOLDER"
+        rendered = " ".join(pol.render(d) for d in _spoke_policies().values())
+        assert pol.CLUSTER_TAG in rendered and pol.VPC_ID_PLACEHOLDER in rendered
 
 
 class TestInstallerPolicy:
