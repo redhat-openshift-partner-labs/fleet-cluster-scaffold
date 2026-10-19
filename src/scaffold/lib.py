@@ -2,15 +2,31 @@
 
 Standalone version — uses a shared cluster-templates directory for base
 resources instead of copying templates into each cluster overlay.
+Cloud-specific pieces are delegated to scaffold.providers.
 """
 
 from __future__ import annotations
 
 import os
 import re
-from dataclasses import dataclass
 
 import yaml
+
+from scaffold.params import TOPOLOGIES, ClusterParams
+from scaffold.providers import PROVIDERS, get_provider
+from scaffold.providers.base import dump, rename_ops, replace, target
+
+__all__ = [
+    "ClusterParams",
+    "TOPOLOGIES",
+    "generate_crossplane_patches",
+    "generate_hive_patches",
+    "generate_metadata",
+    "get_default_zones",
+    "validate_cluster_name",
+    "validate_profile",
+    "write_cluster_dir",
+]
 
 
 class _LiteralStr(str):
@@ -46,14 +62,16 @@ def validate_cluster_name(name: str) -> None:
 
 
 def validate_profile(profile: str, cluster_templates_dir: str) -> None:
-    """Validate that *profile* is a supported AWS profile and its template directory exists.
+    """Validate that *profile* (``<cloud>/<topology>``) is implemented and its template directory exists.
 
-    Raises ValueError if the profile is not AWS-based or the directory is missing.
+    Raises ValueError if the cloud is unsupported or the directory is missing.
     """
-    if not (profile.startswith("aws") ):
+    cloud = profile.split("/", 1)[0]
+    provider = PROVIDERS.get(cloud)
+    if provider is None or not provider.implemented:
+        supported = ", ".join(f"{c}/*" for c, p in PROVIDERS.items() if p.implemented)
         raise ValueError(
-            f"Profile {profile!r} is not supported. "
-            "Only AWS profiles (aws/*) are currently supported."
+            f"Profile {profile!r} is not supported. Supported profiles: {supported}."
         )
     tpl_dir = os.path.join(cluster_templates_dir, profile)
     if not os.path.isdir(tpl_dir):
@@ -62,29 +80,8 @@ def validate_profile(profile: str, cluster_templates_dir: str) -> None:
         )
 
 
-@dataclass
-class ClusterParams:
-    name: str
-    region: str
-    tier: str
-    environment: str = "development"
-    base_domain: str = "openshiftpartnerlabs.com"
-    profile: str = "aws/standard"
-    control_plane_type: str = "m7i.4xlarge"
-    worker_type: str = "m7i.2xlarge"
-    control_plane_replicas: int = 3
-    worker_replicas: int = 3
-    image_set: str = "img4.21.13-x86-64-appsub"
-    zones: list[str] | None = None
-    htpasswd_provider_name: str | None = None
-
-    def __post_init__(self) -> None:
-        if self.zones is None:
-            self.zones = get_default_zones(self.region)
-
-
-def get_default_zones(region: str) -> list[str]:
-    return [f"{region}a", f"{region}b", f"{region}c"]
+def get_default_zones(region: str, cloud: str = "aws") -> list[str]:
+    return get_provider(cloud).default_zones(region)
 
 
 def _resolve_base_resource_path(
@@ -99,348 +96,111 @@ def _resolve_base_resource_path(
     return os.path.relpath(abs_tpl, abs_sub)
 
 
+def _kustomization(namespace: str, base_path: str, patches: list[dict]) -> str:
+    return dump({
+        "apiVersion": "kustomize.config.k8s.io/v1beta1",
+        "kind": "Kustomization",
+        "namespace": namespace,
+        "resources": [base_path],
+        "patches": patches,
+    })
+
+
 # ===================== hive patch generation =====================
 
-# TODO: AWS-specific — parameterize for Azure/GCP when multi-cloud support is added
-def generate_hive_patches(params: ClusterParams, hive_base_path: str = "../base/hive") -> dict[str, str]:
-    n = params.name
-    patches: dict[str, str] = {}
-
-    patches["kustomization.yaml"] = yaml.dump(
-        {
-            "apiVersion": "kustomize.config.k8s.io/v1beta1",
-            "kind": "Kustomization",
-            "namespace": n,
-            "resources": [hive_base_path],
-            "patches": [
-                {"path": "patches/install-config.yaml"},
-                {
-                    "target": {
-                        "kind": "Secret",
-                        "name": "cluster-placeholder-install-config",
-                    },
-                    "path": "patches/install-config-meta.yaml",
-                },
-                {
-                    "target": {"kind": "Namespace", "name": "cluster-placeholder"},
-                    "path": "patches/namespace.yaml",
-                },
-                {
-                    "target": {
-                        "kind": "ClusterDeployment",
-                        "name": "cluster-placeholder",
-                    },
-                    "path": "patches/clusterdeployment.yaml",
-                },
-                {
-                    "target": {
-                        "kind": "MachinePool",
-                        "name": "cluster-placeholder-worker",
-                    },
-                    "path": "patches/machinepool-worker.yaml",
-                },
-                {
-                    "target": {
-                        "kind": "ManagedCluster",
-                        "name": "cluster-placeholder",
-                    },
-                    "path": "patches/managedcluster.yaml",
-                },
-                {
-                    "target": {
-                        "kind": "KlusterletAddonConfig",
-                        "name": "cluster-placeholder",
-                    },
-                    "path": "patches/klusterletaddonconfig.yaml",
-                },
-            ],
-        },
-        default_flow_style=False,
-        sort_keys=False,
-    )
-
-    patches["patches/clusterdeployment.yaml"] = yaml.dump(
-        [
-            {"op": "replace", "path": "/metadata/name", "value": n},
-            {"op": "replace", "path": "/metadata/namespace", "value": n},
-            {"op": "replace", "path": "/spec/clusterName", "value": n},
-            {
-                "op": "replace",
-                "path": "/spec/platform/aws/region",
-                "value": params.region,
-            },
-            {
-                "op": "replace",
-                "path": "/spec/provisioning/installConfigSecretRef/name",
-                "value": f"{n}-install-config",
-            },
-            {
-                "op": "replace",
-                "path": "/spec/provisioning/sshPrivateKeySecretRef/name",
-                "value": f"{n}-ssh-key",
-            },
-            {
-                "op": "replace",
-                "path": "/spec/provisioning/imageSetRef/name",
-                "value": params.image_set,
-            },
-        ],
-        default_flow_style=False,
-        sort_keys=False,
-    )
-
-    zones = params.zones or get_default_zones(params.region)
-    install_config = {
+def _install_config(params: ClusterParams) -> dict:
+    cp_platform, worker_platform, platform = get_provider(params.cloud).install_config_platforms(params)
+    worker = {"name": "worker", "platform": worker_platform, "replicas": params.worker_replicas}
+    return {
         "apiVersion": "v1",
         "baseDomain": params.base_domain,
-        "metadata": {"name": n},
+        "metadata": {"name": params.name},
         "controlPlane": {
             "name": "master",
-            "platform": {
-                "aws": {
-                    "type": params.control_plane_type,
-                    "zones": list(zones),
-                }
-            },
+            "platform": cp_platform,
             "replicas": params.control_plane_replicas,
         },
-        "compute": [
-            {
-                "name": "worker",
-                "platform": {
-                    "aws": {
-                        "rootVolume": {"iops": 4000, "size": 100, "type": "gp3"},
-                        "type": params.worker_type,
-                        "zones": list(zones),
-                    }
-                },
-                "replicas": params.worker_replicas,
-            }
-        ],
+        "compute": [worker],
         "networking": {
             "clusterNetwork": [{"cidr": "10.128.0.0/14", "hostPrefix": 23}],
             "machineNetwork": [{"cidr": "10.0.0.0/16"}],
             "serviceNetwork": ["172.30.0.0/16"],
             "networkType": "OVNKubernetes",
         },
-        "platform": {"aws": {"region": params.region}},
+        "platform": platform,
         "publish": "External",
     }
 
-    patches["patches/install-config.yaml"] = yaml.dump(
-        {
-            "apiVersion": "v1",
-            "kind": "Secret",
-            "metadata": {
-                "name": "cluster-placeholder-install-config",
-                "namespace": "cluster-placeholder",
-            },
-            "type": "Opaque",
-            "stringData": {
-                "install-config.yaml": _LiteralStr(
-                    yaml.dump(install_config, default_flow_style=False, sort_keys=False)
-                )
-            },
+
+def generate_hive_patches(params: ClusterParams, hive_base_path: str = "../base/hive") -> dict[str, str]:
+    n = params.name
+    provider = get_provider(params.cloud)
+
+    entries = [
+        {"path": "patches/install-config.yaml"},
+        target("Secret", "cluster-placeholder-install-config", "patches/install-config-meta.yaml"),
+        target("Namespace", "cluster-placeholder", "patches/namespace.yaml"),
+        target("ClusterDeployment", "cluster-placeholder", "patches/clusterdeployment.yaml"),
+        target("MachinePool", "cluster-placeholder-worker", "patches/machinepool-worker.yaml"),
+        target("ManagedCluster", "cluster-placeholder", "patches/managedcluster.yaml"),
+        target("KlusterletAddonConfig", "cluster-placeholder", "patches/klusterletaddonconfig.yaml"),
+    ]
+
+    patches: dict[str, str] = {"kustomization.yaml": _kustomization(n, hive_base_path, entries)}
+
+    patches["patches/clusterdeployment.yaml"] = dump(
+        rename_ops(n, n)
+        + [replace("/spec/clusterName", n)]
+        + provider.clusterdeployment_ops(params)
+        + [
+            replace("/spec/provisioning/installConfigSecretRef/name", f"{n}-install-config"),
+            replace("/spec/provisioning/sshPrivateKeySecretRef/name", f"{n}-ssh-key"),
+            replace("/spec/provisioning/imageSetRef/name", params.image_set),
+        ]
+    )
+
+    # Strategic-merge patch on the placeholder Secret; renamed afterwards by install-config-meta
+    patches["patches/install-config.yaml"] = dump({
+        "apiVersion": "v1",
+        "kind": "Secret",
+        "metadata": {
+            "name": "cluster-placeholder-install-config",
+            "namespace": "cluster-placeholder",
         },
-        default_flow_style=False,
-        sort_keys=False,
+        "type": "Opaque",
+        "stringData": {"install-config.yaml": _LiteralStr(dump(_install_config(params)))},
+    })
+
+    patches["patches/install-config-meta.yaml"] = dump(rename_ops(f"{n}-install-config", n))
+    patches["patches/namespace.yaml"] = dump([replace("/metadata/name", n)])
+    patches["patches/klusterletaddonconfig.yaml"] = dump(rename_ops(n, n) + [
+        replace("/spec/clusterName", n),
+        replace("/spec/clusterNamespace", n),
+    ])
+
+    patches["patches/machinepool-worker.yaml"] = dump(
+        rename_ops(f"{n}-worker", n)
+        + [replace("/spec/clusterDeploymentRef/name", n)]
+        + provider.machinepool_ops(params)
+        + [replace("/spec/replicas", params.worker_replicas)]
     )
 
-    patches["patches/install-config-meta.yaml"] = yaml.dump(
-        [
-            {
-                "op": "replace",
-                "path": "/metadata/name",
-                "value": f"{n}-install-config",
-            },
-            {"op": "replace", "path": "/metadata/namespace", "value": n},
-        ],
-        default_flow_style=False,
-        sort_keys=False,
-    )
-
-    patches["patches/namespace.yaml"] = yaml.dump(
-        [{"op": "replace", "path": "/metadata/name", "value": n}],
-        default_flow_style=False,
-        sort_keys=False,
-    )
-
-    patches["patches/klusterletaddonconfig.yaml"] = yaml.dump(
-        [
-            {"op": "replace", "path": "/metadata/name", "value": n},
-            {"op": "replace", "path": "/metadata/namespace", "value": n},
-            {"op": "replace", "path": "/spec/clusterName", "value": n},
-            {"op": "replace", "path": "/spec/clusterNamespace", "value": n},
-        ],
-        default_flow_style=False,
-        sort_keys=False,
-    )
-
-    patches["patches/machinepool-worker.yaml"] = yaml.dump(
-        [
-            {"op": "replace", "path": "/metadata/name", "value": f"{n}-worker"},
-            {"op": "replace", "path": "/metadata/namespace", "value": n},
-            {"op": "replace", "path": "/spec/clusterDeploymentRef/name", "value": n},
-            {
-                "op": "replace",
-                "path": "/spec/platform/aws/type",
-                "value": params.worker_type,
-            },
-            {
-                "op": "replace",
-                "path": "/spec/platform/aws/zones",
-                "value": list(zones),
-            },
-            {
-                "op": "replace",
-                "path": "/spec/replicas",
-                "value": params.worker_replicas,
-            },
-        ],
-        default_flow_style=False,
-        sort_keys=False,
-    )
-
-    patches["patches/managedcluster.yaml"] = yaml.dump(
-        [
-            {"op": "replace", "path": "/metadata/name", "value": n},
-            {"op": "add", "path": "/metadata/labels/name", "value": n},
-            {"op": "add", "path": "/metadata/labels/tier", "value": params.tier},
-            {
-                "op": "add",
-                "path": "/metadata/labels/environment",
-                "value": params.environment,
-            },
-            {"op": "add", "path": "/metadata/labels/region", "value": params.region},
-        ],
-        default_flow_style=False,
-        sort_keys=False,
-    )
+    patches["patches/managedcluster.yaml"] = dump([
+        replace("/metadata/name", n),
+        {"op": "add", "path": "/metadata/labels/name", "value": n},
+        {"op": "add", "path": "/metadata/labels/tier", "value": params.tier},
+        {"op": "add", "path": "/metadata/labels/environment", "value": params.environment},
+        {"op": "add", "path": "/metadata/labels/region", "value": params.region},
+    ])
 
     return patches
 
 
 # ===================== crossplane patch generation =====================
 
-# TODO: AWS-specific — parameterize for Azure/GCP when multi-cloud support is added
 def generate_crossplane_patches(params: ClusterParams, crossplane_base_path: str = "../base/crossplane") -> dict[str, str]:
-    n = params.name
-    patches: dict[str, str] = {}
-
-    patches["kustomization.yaml"] = yaml.dump(
-        {
-            "apiVersion": "kustomize.config.k8s.io/v1beta1",
-            "kind": "Kustomization",
-            "namespace": n,
-            "resources": [crossplane_base_path],
-            "patches": [
-                {
-                    "target": {
-                        "kind": "User",
-                        "name": "cluster-placeholder-ocp-installer",
-                    },
-                    "path": "patches/user.yaml",
-                },
-                {
-                    "target": {
-                        "kind": "Policy",
-                        "name": "cluster-placeholder-openshift4installerpolicy",
-                    },
-                    "path": "patches/policy.yaml",
-                },
-                {
-                    "target": {
-                        "kind": "UserPolicyAttachment",
-                        "name": "cluster-placeholder-policy-attachment",
-                    },
-                    "path": "patches/policy-attachment.yaml",
-                },
-                {
-                    "target": {
-                        "kind": "AccessKey",
-                        "name": "cluster-placeholder-access-key",
-                    },
-                    "path": "patches/access-key.yaml",
-                },
-            ],
-        },
-        default_flow_style=False,
-        sort_keys=False,
-    )
-
-    patches["patches/user.yaml"] = yaml.dump(
-        [
-            {
-                "op": "replace",
-                "path": "/metadata/name",
-                "value": f"{n}-ocp-installer",
-            },
-            {"op": "replace", "path": "/metadata/namespace", "value": n},
-        ],
-        default_flow_style=False,
-        sort_keys=False,
-    )
-
-    patches["patches/policy.yaml"] = yaml.dump(
-        [
-            {
-                "op": "replace",
-                "path": "/metadata/name",
-                "value": f"{n}-openshift4installerpolicy",
-            },
-            {"op": "replace", "path": "/metadata/namespace", "value": n},
-        ],
-        default_flow_style=False,
-        sort_keys=False,
-    )
-
-    patches["patches/policy-attachment.yaml"] = yaml.dump(
-        [
-            {
-                "op": "replace",
-                "path": "/metadata/name",
-                "value": f"{n}-policy-attachment",
-            },
-            {"op": "replace", "path": "/metadata/namespace", "value": n},
-            {
-                "op": "replace",
-                "path": "/spec/forProvider/policyArnRef/name",
-                "value": f"{n}-openshift4installerpolicy",
-            },
-            {
-                "op": "replace",
-                "path": "/spec/forProvider/userRef/name",
-                "value": f"{n}-ocp-installer",
-            },
-        ],
-        default_flow_style=False,
-        sort_keys=False,
-    )
-
-    patches["patches/access-key.yaml"] = yaml.dump(
-        [
-            {
-                "op": "replace",
-                "path": "/metadata/name",
-                "value": f"{n}-access-key",
-            },
-            {"op": "replace", "path": "/metadata/namespace", "value": n},
-            {
-                "op": "replace",
-                "path": "/spec/forProvider/userRef/name",
-                "value": f"{n}-ocp-installer",
-            },
-            {
-                "op": "replace",
-                "path": "/spec/writeConnectionSecretToRef/namespace",
-                "value": n,
-            },
-        ],
-        default_flow_style=False,
-        sort_keys=False,
-    )
-
-    return patches
+    entries, files = get_provider(params.cloud).crossplane_patches(params)
+    return {"kustomization.yaml": _kustomization(params.name, crossplane_base_path, entries), **files}
 
 
 # ===================== metadata generation =====================
@@ -449,7 +209,7 @@ def generate_metadata(params: ClusterParams) -> str:
     meta: dict[str, str] = {}
     if params.htpasswd_provider_name:
         meta["htpasswd-provider-name"] = params.htpasswd_provider_name
-    return yaml.dump(meta, default_flow_style=False, sort_keys=False)
+    return dump(meta)
 
 
 # ===================== directory writing =====================
@@ -462,31 +222,24 @@ def _write(path: str, content: str) -> None:
 
 def write_cluster_dir(base_path: str, params: ClusterParams, cluster_templates_dir: str = "cluster-templates") -> str:
     cluster_dir = os.path.join(base_path, params.name)
-    profile = params.profile or "aws/standard"
+    profile = params.profile
 
     hive_base_path = _resolve_base_resource_path(cluster_dir, "hive", cluster_templates_dir, profile)
     crossplane_base_path = _resolve_base_resource_path(cluster_dir, "crossplane", cluster_templates_dir, profile)
 
-    top_kustomization = yaml.dump(
-        {
-            "apiVersion": "kustomize.config.k8s.io/v1beta1",
-            "kind": "Kustomization",
-            "resources": ["crossplane/", "hive/"],
-        },
-        default_flow_style=False,
-        sort_keys=False,
-    )
-
-    hive_patches = generate_hive_patches(params, hive_base_path)
-    crossplane_patches = generate_crossplane_patches(params, crossplane_base_path)
+    top_kustomization = dump({
+        "apiVersion": "kustomize.config.k8s.io/v1beta1",
+        "kind": "Kustomization",
+        "resources": ["crossplane/", "hive/"],
+    })
 
     _write(os.path.join(cluster_dir, "kustomization.yaml"), top_kustomization)
     _write(os.path.join(cluster_dir, "metadata.yaml"), generate_metadata(params))
 
-    for rel_path, content in hive_patches.items():
+    for rel_path, content in generate_hive_patches(params, hive_base_path).items():
         _write(os.path.join(cluster_dir, "hive", rel_path), content)
 
-    for rel_path, content in crossplane_patches.items():
+    for rel_path, content in generate_crossplane_patches(params, crossplane_base_path).items():
         _write(os.path.join(cluster_dir, "crossplane", rel_path), content)
 
     return cluster_dir

@@ -13,6 +13,7 @@ def default_args(tmp_path):
     tpl_dir = tmp_path / "cluster-templates"
     (tpl_dir / "aws" / "standard").mkdir(parents=True)
     return [
+        "aws",
         "--name",
         "my-cluster",
         "--region",
@@ -21,8 +22,8 @@ def default_args(tmp_path):
         "base",
         "--environment",
         "development",
-        "--profile",
-        "aws/standard",
+        "--topology",
+        "standard",
         "--base-path",
         str(tmp_path),
         "--cluster-templates-dir",
@@ -42,6 +43,7 @@ def test_scaffold_writes_and_validates(mock_run, mock_which, tmp_path):
     tpl_dir = tmp_path / "cluster-templates"
     (tpl_dir / "aws" / "standard").mkdir(parents=True)
     args = [
+        "aws",
         "--name",
         "test-01",
         "--region",
@@ -50,8 +52,8 @@ def test_scaffold_writes_and_validates(mock_run, mock_which, tmp_path):
         "base",
         "--environment",
         "development",
-        "--profile",
-        "aws/standard",
+        "--topology",
+        "standard",
         "--base-path",
         str(tmp_path),
         "--cluster-templates-dir",
@@ -74,6 +76,7 @@ def test_scaffold_fails_on_invalid_kustomize(mock_run, mock_which, tmp_path):
     tpl_dir = tmp_path / "cluster-templates"
     (tpl_dir / "aws" / "standard").mkdir(parents=True)
     args = [
+        "aws",
         "--name",
         "bad-cluster",
         "--region",
@@ -82,8 +85,8 @@ def test_scaffold_fails_on_invalid_kustomize(mock_run, mock_which, tmp_path):
         "base",
         "--environment",
         "development",
-        "--profile",
-        "aws/standard",
+        "--topology",
+        "standard",
         "--base-path",
         str(tmp_path),
         "--cluster-templates-dir",
@@ -102,6 +105,7 @@ def test_scaffold_with_custom_zones(mock_run, mock_which, tmp_path):
     tpl_dir = tmp_path / "cluster-templates"
     (tpl_dir / "aws" / "standard").mkdir(parents=True)
     args = [
+        "aws",
         "--name",
         "zoned",
         "--region",
@@ -112,8 +116,8 @@ def test_scaffold_with_custom_zones(mock_run, mock_which, tmp_path):
         "eu-west-1a,eu-west-1c",
         "--environment",
         "production",
-        "--profile",
-        "aws/standard",
+        "--topology",
+        "standard",
         "--base-path",
         str(tmp_path),
         "--cluster-templates-dir",
@@ -131,6 +135,7 @@ def test_shows_kustomize_missing_error(mock_which, tmp_path):
     tpl_dir = tmp_path / "cluster-templates"
     (tpl_dir / "aws" / "standard").mkdir(parents=True)
     args = [
+        "aws",
         "--name",
         "no-kust",
         "--region",
@@ -139,8 +144,8 @@ def test_shows_kustomize_missing_error(mock_which, tmp_path):
         "base",
         "--environment",
         "development",
-        "--profile",
-        "aws/standard",
+        "--topology",
+        "standard",
         "--base-path",
         str(tmp_path),
         "--cluster-templates-dir",
@@ -172,11 +177,12 @@ def test_skip_validation_skips_kustomize_check(mock_which, tmp_path):
     tpl_dir = tmp_path / "cluster-templates"
     (tpl_dir / "aws" / "standard").mkdir(parents=True)
     main([
+        "aws",
         "--name", "x",
         "--region", "r",
         "--tier", "base",
         "--environment", "dev",
-        "--profile", "aws/standard",
+        "--topology", "standard",
         "--base-path", str(tmp_path),
         "--cluster-templates-dir", str(tpl_dir),
         "--skip-validation",
@@ -192,6 +198,7 @@ def test_worker_type_used_verbatim_without_profile(mock_run, tmp_path):
     (tpl_dir / "aws" / "standard").mkdir(parents=True)
     with mock.patch("scaffold.cli.shutil.which", return_value="kustomize"):
         main([
+            "aws",
             "--name", "wt",
             "--region", "us-east-1",
             "--tier", "base",
@@ -211,11 +218,12 @@ def test_worker_type_used_even_with_profile(mock_run, tmp_path):
     (tpl_dir / "aws" / "standard").mkdir(parents=True)
     with mock.patch("scaffold.cli.shutil.which", return_value="kustomize"):
         main([
+            "aws",
             "--name", "wt2",
             "--region", "us-east-1",
             "--tier", "base",
             "--worker-type", "r6i.xlarge",
-            "--profile", "aws/standard",
+            "--topology", "standard",
             "--base-path", str(tmp_path),
             "--cluster-templates-dir", str(tpl_dir),
         ])
@@ -228,6 +236,7 @@ def test_base_domain_forwarded_to_output(tmp_path):
     tpl_dir = tmp_path / "cluster-templates"
     (tpl_dir / "aws" / "standard").mkdir(parents=True)
     main([
+        "aws",
         "--name", "bd",
         "--region", "us-east-1",
         "--tier", "base",
@@ -245,6 +254,7 @@ def test_base_domain_default_when_omitted(tmp_path):
     tpl_dir = tmp_path / "cluster-templates"
     (tpl_dir / "aws" / "standard").mkdir(parents=True)
     main([
+        "aws",
         "--name", "bd2",
         "--region", "us-east-1",
         "--tier", "base",
@@ -261,10 +271,11 @@ def test_profile_forwarded_to_kustomization_resource(tmp_path):
     tpl_dir = tmp_path / "cluster-templates"
     (tpl_dir / "aws" / "standard").mkdir(parents=True)
     main([
+        "aws",
         "--name", "pf",
         "--region", "us-east-1",
         "--tier", "base",
-        "--profile", "aws/standard",
+        "--topology", "standard",
         "--base-path", str(tmp_path),
         "--cluster-templates-dir", str(tpl_dir),
         "--skip-validation",
@@ -277,6 +288,7 @@ def test_rejects_invalid_cluster_name(tmp_path):
     tpl_dir = tmp_path / "cluster-templates"
     tpl_dir.mkdir()
     result = main([
+        "aws",
         "--name", "INVALID_NAME!",
         "--region", "us-east-1",
         "--tier", "base",
@@ -295,6 +307,7 @@ def test_refuses_overwrite_when_dir_exists(tmp_path):
     (tpl_dir / "aws" / "standard").mkdir(parents=True)
     (tmp_path / "existing").mkdir()
     result = main([
+        "aws",
         "--name", "existing",
         "--region", "us-east-1",
         "--tier", "base",
@@ -310,6 +323,7 @@ def test_force_allows_overwrite(tmp_path):
     (tpl_dir / "aws" / "standard").mkdir(parents=True)
     (tmp_path / "existing").mkdir()
     result = main([
+        "aws",
         "--name", "existing",
         "--region", "us-east-1",
         "--tier", "base",
@@ -326,6 +340,7 @@ def test_fresh_directory_without_force(tmp_path):
     tpl_dir = tmp_path / "cluster-templates"
     (tpl_dir / "aws" / "standard").mkdir(parents=True)
     result = main([
+        "aws",
         "--name", "fresh",
         "--region", "us-east-1",
         "--tier", "base",
@@ -337,19 +352,23 @@ def test_fresh_directory_without_force(tmp_path):
     assert (tmp_path / "fresh" / "kustomization.yaml").exists()
 
 
-def test_rejects_non_aws_profile(tmp_path):
-    tpl_dir = tmp_path / "cluster-templates" / "azure" / "standard" / "hive"
-    tpl_dir.mkdir(parents=True)
-    result = main([
-        "--name", "az-cluster",
-        "--region", "eastus",
-        "--tier", "base",
-        "--profile", "azure/standard",
-        "--base-path", str(tmp_path),
-        "--cluster-templates-dir", str(tmp_path / "cluster-templates"),
-        "--skip-validation",
-    ])
-    assert result == 1
+# ======== Cloud subcommand tests ========
+
+
+def test_cloud_subcommand_required(tmp_path):
+    with pytest.raises(SystemExit):
+        main(["--name", "x", "--region", "r", "--tier", "base"])
+
+
+@pytest.mark.parametrize("cloud", ["gcp", "ibmcloud"])
+def test_planned_provider_not_supported(cloud, tmp_path):
+    assert main([cloud, "--name", "x", "--base-path", str(tmp_path)]) == 1
+    assert not (tmp_path / "x").exists()
+
+
+def test_unknown_flag_rejected_for_implemented_provider(default_args):
+    with pytest.raises(SystemExit):
+        main(default_args + ["--skip-validation", "--bogus"])
 
 
 if __name__ == "__main__":

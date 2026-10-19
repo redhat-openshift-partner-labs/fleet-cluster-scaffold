@@ -329,7 +329,7 @@ class TestWriteClusterDir:
             name="param-test",
             region="us-west-1",
             tier="test",
-            profile="aws/standard",
+            topology="standard",
         )
         write_cluster_dir(str(tmp_path), params, str(tpl_dir))
         cluster_dir = tmp_path / "param-test"
@@ -343,7 +343,7 @@ class TestWriteClusterDir:
             region="us-east-1",
             tier="virt",
             base_domain=custom_domain,
-            profile="aws/standard",
+            topology="standard",
         )
         patches = generate_hive_patches(params)
         ic = yaml.safe_load(patches["patches/install-config.yaml"])
@@ -432,8 +432,8 @@ class TestClusterParams:
         params_default = ClusterParams(name="p", region="x", tier="t")
         assert params_default.profile == "aws/standard"
 
-        params_custom = ClusterParams(name="p", region="x", tier="t", profile="test")
-        assert params_custom.profile == "test"
+        params_custom = ClusterParams(name="p", region="x", tier="t", topology="sno")
+        assert params_custom.profile == "aws/sno"
 
     def test_base_domain_attr_available(self):
         params = ClusterParams(name="b", region="r", tier="t", base_domain="mydomain.com")
@@ -523,6 +523,12 @@ class TestValidateProfile:
         with pytest.raises(ValueError, match="not supported"):
             validate_profile("azure/standard", str(tmp_path / "cluster-templates"))
 
+    def test_rejects_ibmcloud(self, tmp_path):
+        tpl = tmp_path / "cluster-templates" / "ibmcloud" / "standard" / "hive"
+        tpl.mkdir(parents=True)
+        with pytest.raises(ValueError, match="not supported"):
+            validate_profile("ibmcloud/standard", str(tmp_path / "cluster-templates"))
+
     def test_rejects_gcp(self, tmp_path):
         tpl = tmp_path / "cluster-templates" / "gcp" / "compact" / "hive"
         tpl.mkdir(parents=True)
@@ -534,3 +540,4 @@ class TestValidateProfile:
         tpl.mkdir()
         with pytest.raises(ValueError, match="not found"):
             validate_profile("aws/nonexistent", str(tpl))
+

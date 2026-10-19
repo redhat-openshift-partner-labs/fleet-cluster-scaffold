@@ -1,7 +1,7 @@
 """Scaffold a new cluster overlay directory.
 
-CLI: fleet-scaffold-cluster --name NAME --region REGION --tier TIER [options]
-Generates clusters/<name>/ with all Kustomize patches pre-populated.
+CLI: fleet-scaffold-cluster CLOUD --name NAME --region REGION --tier TIER [options]
+Generates <base-path>/<name>/ with all Kustomize patches pre-populated.
 Validates output with kustomize build. Exits 1 on validation failure.
 """
 
@@ -14,7 +14,8 @@ import shutil
 import subprocess
 import sys
 
-from scaffold.lib import ClusterParams, validate_cluster_name, validate_profile, write_cluster_dir
+from scaffold.lib import TOPOLOGIES, ClusterParams, validate_cluster_name, validate_profile, write_cluster_dir
+from scaffold.providers import PROVIDERS
 
 _LOG = logging.getLogger("scaffold")
 
@@ -29,109 +30,102 @@ def check_kustomize() -> bool:
     return True
 
 
-def main(args=None) -> int:
-    parser = argparse.ArgumentParser(description="Scaffold a new cluster overlay")
+def _common_parser() -> argparse.ArgumentParser:
+    """Flags shared by every cloud subcommand."""
+    common = argparse.ArgumentParser(add_help=False)
 
-    # Required args (from monorepo CLI — kept verbatim after transport into cli.py context)
-    parser.add_argument("--name", required=True, help="Cluster name")
-    parser.add_argument("--region", required=True, help="AWS region")
-    parser.add_argument(
-        "--tier", required=True, choices=["base", "virt", "ai"], help="Tier"
+    common.add_argument("--name", required=True, help="Cluster name (DNS-1123 label)")
+    common.add_argument("--region", required=True, help="Cloud region (e.g. us-east-1, eastus)")
+    common.add_argument("--tier", required=True, choices=["base", "virt", "ai"], help="Tier")
+    common.add_argument(
+        "--topology",
+        default="standard",
+        choices=list(TOPOLOGIES),
+        help="Cluster topology; selects cluster-templates/<cloud>/<topology> (default: %(default)s)",
+    )
+    common.add_argument("--environment", default="development", help="Environment name (default: %(default)s)")
+    common.add_argument(
+        "--base-domain", default="openshiftpartnerlabs.com", help="Cluster base DNS domain (default: %(default)s)"
     )
 
-    # Environment
-    parser.add_argument("--environment", default="development", help="Environment name")
+    common.add_argument("--control-plane-replicas", type=int, default=3, help="Default: %(default)s")
+    common.add_argument("--worker-replicas", type=int, default=3, help="Default: %(default)s")
 
-    # Control-plane tuning
-    parser.add_argument(
-        "--control-plane-type",
-        default="m7i.4xlarge",
-    )
-    parser.add_argument(
-        "--worker-type", default="m7i.2xlarge"
-    )
-    parser.add_argument(
-        "--control-plane-replicas", type=int, default=3,
-    )
-    parser.add_argument("--worker-replicas", type=int, default=3)
-
-    # Image set
-    parser.add_argument("--image-set", default="img4.21.13-x86-64-appsub")
-
-    # Zones override
-    parser.add_argument("--zones", default=None, help="Comma-separated AZ list")
-
-    # Base output dir (overridden from monorepo "clusters" default so this tool works standalone)
-    parser.add_argument(
-        "--base-path", default=".", help="Parent directory for cluster overlays"
-    )
-
-    # NEW: AWS profile mapping to worker type convention
-    parser.add_argument("--profile", default=None, help="AWS profile (maps to worker-type)")
-
-    # NEW: base domain override
-    parser.add_argument("--base-domain", default=None, help="Cluster base DNS domain")
-
-    # Cluster metadata
-    parser.add_argument(
+    common.add_argument("--image-set", default="img4.21.13-x86-64-appsub", help="ClusterImageSet name (default: %(default)s)")
+    common.add_argument("--zones", default=None, help="Comma-separated zone list (default: provider-specific)")
+    common.add_argument(
         "--htpasswd-provider-name",
         default=None,
         help="Display name for the htpasswd identity provider (should be the company name)",
     )
-
-    # Cluster templates directory
-    parser.add_argument(
+    common.add_argument("--base-path", default=".", help="Parent directory for cluster overlays (default: %(default)s)")
+    common.add_argument(
         "--cluster-templates-dir",
         default="cluster-templates",
-        help="Path to the shared cluster-templates directory",
+        help="Path to the shared cluster-templates directory (default: %(default)s)",
     )
-
-    # Overwrite protection
-    parser.add_argument(
-        "--force",
-        action="store_true",
-        default=False,
-        help="Overwrite existing cluster directory if it exists.",
+    common.add_argument(
+        "--force", action="store_true", default=False, help="Overwrite existing cluster directory if it exists."
     )
-
-    # Kustomize validation
-    parser.add_argument(
-        "--skip-validation",
-        action="store_true",
-        default=False,
-        help="Skip kustomize build validation after scaffolding.",
+    common.add_argument(
+        "--skip-validation", action="store_true", default=False, help="Skip kustomize build validation after scaffolding."
     )
+    return common
 
-    parsed = parser.parse_args(args)
 
-    zones = parsed.zones.split(",") if parsed.zones else None
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="fleet-scaffold-cluster", description="Scaffold a new cluster overlay")
+    sub = parser.add_subparsers(dest="cloud", required=True, metavar="CLOUD")
+    common = _common_parser()
 
-    kwargs = dict(
-        name=parsed.name,
-        region=parsed.region,
-        tier=parsed.tier,
-        environment=parsed.environment,
-        control_plane_type=parsed.control_plane_type,
-        worker_type=parsed.worker_type,
-        control_plane_replicas=parsed.control_plane_replicas,
-        worker_replicas=parsed.worker_replicas,
-        image_set=parsed.image_set,
-        zones=zones,
-        htpasswd_provider_name=parsed.htpasswd_provider_name,
-    )
-    if parsed.base_domain is not None:
-        kwargs["base_domain"] = parsed.base_domain
-    if parsed.profile is not None:
-        kwargs["profile"] = parsed.profile
+    for name, provider in PROVIDERS.items():
+        if not provider.implemented:
+            # Visible in --help; exits with "not yet supported" before flag parsing matters
+            sub.add_parser(name, help=provider.help)
+            continue
+        p = sub.add_parser(name, parents=[common], help=provider.help)
+        # Instance-type defaults differ per cloud, so they're added per subcommand
+        p.add_argument(
+            "--control-plane-type", default=provider.control_plane_type, help="Control plane instance type (default: %(default)s)"
+        )
+        p.add_argument("--worker-type", default=provider.worker_type, help="Worker instance type (default: %(default)s)")
+        provider.add_arguments(p)
+    return parser
+
+
+def main(args=None) -> int:  # pylint: disable=too-many-return-statements
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    parser = build_parser()
+    parsed, extra = parser.parse_known_args(args)
+
+    provider = PROVIDERS[parsed.cloud]
+    if not provider.implemented:
+        _LOG.error("Cloud provider %r is not yet supported.", parsed.cloud)
+        return 1
+    if extra:
+        parser.error(f"unrecognized arguments: {' '.join(extra)}")
+
     try:
         validate_cluster_name(parsed.name)
-    except ValueError as exc:
-        _LOG.error("%s", exc)
-        return 1
-
-    profile = parsed.profile or "aws/standard"
-    try:
-        validate_profile(profile, parsed.cluster_templates_dir)
+        params = ClusterParams(
+            name=parsed.name,
+            region=parsed.region,
+            tier=parsed.tier,
+            cloud=parsed.cloud,
+            topology=parsed.topology,
+            environment=parsed.environment,
+            base_domain=parsed.base_domain,
+            control_plane_type=parsed.control_plane_type,
+            worker_type=parsed.worker_type,
+            control_plane_replicas=parsed.control_plane_replicas,
+            worker_replicas=parsed.worker_replicas,
+            image_set=parsed.image_set,
+            zones=parsed.zones.split(",") if parsed.zones else None,
+            htpasswd_provider_name=parsed.htpasswd_provider_name,
+            provider_options=provider.options_from_args(parsed),
+        )
+        provider.validate(params)
+        validate_profile(params.profile, parsed.cluster_templates_dir)
     except ValueError as exc:
         _LOG.error("%s", exc)
         return 1
@@ -143,14 +137,12 @@ def main(args=None) -> int:
         )
         return 1
 
-    params = ClusterParams(**kwargs)
-
-    _LOG.info("Scaffolding cluster %r in %s/", params.name, parsed.base_path)
+    _LOG.info("Scaffolding %s cluster %r in %s/", params.profile, params.name, parsed.base_path)
     cluster_dir = write_cluster_dir(parsed.base_path, params, parsed.cluster_templates_dir)
     _LOG.info("  -> wrote %s", cluster_dir)
 
     if parsed.skip_validation:
-        _LOG.info("Skipping kustomize validation (+skip-validation).")
+        _LOG.info("Skipping kustomize validation (--skip-validation).")
         return 0
 
     if not check_kustomize():
