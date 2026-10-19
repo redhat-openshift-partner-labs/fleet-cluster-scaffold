@@ -371,5 +371,26 @@ def test_unknown_flag_rejected_for_implemented_provider(default_args):
         main(default_args + ["--skip-validation", "--bogus"])
 
 
+# ======== Topology tests ========
+
+
+def test_topology_selects_template_and_replicas(tmp_path):
+    (tmp_path / "cluster-templates" / "aws" / "sno").mkdir(parents=True)
+    assert main([
+        "aws", "--name", "sno1", "--region", "us-east-1", "--tier", "base",
+        "--topology", "sno",
+        "--base-path", str(tmp_path),
+        "--cluster-templates-dir", str(tmp_path / "cluster-templates"),
+        "--skip-validation",
+    ]) == 0
+    hive = tmp_path / "sno1" / "hive"
+    assert "aws/sno/hive" in yaml.safe_load((hive / "kustomization.yaml").read_text())["resources"][0]
+    assert not (hive / "patches" / "machinepool-worker.yaml").exists()
+    ic = yaml.safe_load((hive / "patches" / "install-config.yaml").read_text())
+    embedded = yaml.safe_load(ic["stringData"]["install-config.yaml"])
+    assert embedded["controlPlane"]["replicas"] == 1
+    assert embedded["compute"][0] == {"name": "worker", "replicas": 0}
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

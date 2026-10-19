@@ -14,7 +14,7 @@ import shutil
 import subprocess
 import sys
 
-from scaffold.lib import TOPOLOGIES, ClusterParams, validate_cluster_name, validate_profile, write_cluster_dir
+from scaffold.lib import TOPOLOGY_REPLICAS, ClusterParams, validate_cluster_name, validate_profile, write_cluster_dir
 from scaffold.providers import PROVIDERS
 
 _LOG = logging.getLogger("scaffold")
@@ -40,7 +40,7 @@ def _common_parser() -> argparse.ArgumentParser:
     common.add_argument(
         "--topology",
         default="standard",
-        choices=list(TOPOLOGIES),
+        choices=list(TOPOLOGY_REPLICAS),
         help="Cluster topology; selects cluster-templates/<cloud>/<topology> (default: %(default)s)",
     )
     common.add_argument("--environment", default="development", help="Environment name (default: %(default)s)")
@@ -48,8 +48,9 @@ def _common_parser() -> argparse.ArgumentParser:
         "--base-domain", default="openshiftpartnerlabs.com", help="Cluster base DNS domain (default: %(default)s)"
     )
 
-    common.add_argument("--control-plane-replicas", type=int, default=3, help="Default: %(default)s")
-    common.add_argument("--worker-replicas", type=int, default=3, help="Default: %(default)s")
+    # Replica defaults depend on topology (see TOPOLOGY_REPLICAS)
+    common.add_argument("--control-plane-replicas", type=int, default=None, help="Default: 3, or 1 for sno")
+    common.add_argument("--worker-replicas", type=int, default=None, help="Default: 3, or 0 for compact/sno")
 
     common.add_argument("--image-set", default="img4.21.13-x86-64-appsub", help="ClusterImageSet name (default: %(default)s)")
     common.add_argument("--zones", default=None, help="Comma-separated zone list (default: provider-specific)")

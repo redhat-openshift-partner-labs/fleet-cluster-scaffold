@@ -12,13 +12,13 @@ import re
 
 import yaml
 
-from scaffold.params import TOPOLOGIES, ClusterParams
+from scaffold.params import TOPOLOGY_REPLICAS, ClusterParams
 from scaffold.providers import PROVIDERS, get_provider
 from scaffold.providers.base import dump, rename_ops, replace, target
 
 __all__ = [
     "ClusterParams",
-    "TOPOLOGIES",
+    "TOPOLOGY_REPLICAS",
     "generate_crossplane_patches",
     "generate_hive_patches",
     "generate_metadata",
@@ -110,7 +110,10 @@ def _kustomization(namespace: str, base_path: str, patches: list[dict]) -> str:
 
 def _install_config(params: ClusterParams) -> dict:
     cp_platform, worker_platform, platform = get_provider(params.cloud).install_config_platforms(params)
-    worker = {"name": "worker", "platform": worker_platform, "replicas": params.worker_replicas}
+    worker: dict = {"name": "worker"}
+    if params.worker_replicas:
+        worker["platform"] = worker_platform
+    worker["replicas"] = params.worker_replicas
     return {
         "apiVersion": "v1",
         "baseDomain": params.base_domain,
@@ -141,7 +144,11 @@ def generate_hive_patches(params: ClusterParams, hive_base_path: str = "../base/
         target("Secret", "cluster-placeholder-install-config", "patches/install-config-meta.yaml"),
         target("Namespace", "cluster-placeholder", "patches/namespace.yaml"),
         target("ClusterDeployment", "cluster-placeholder", "patches/clusterdeployment.yaml"),
-        target("MachinePool", "cluster-placeholder-worker", "patches/machinepool-worker.yaml"),
+    ]
+    # compact/sno bases have no worker MachinePool to patch
+    if params.has_worker_pool:
+        entries.append(target("MachinePool", "cluster-placeholder-worker", "patches/machinepool-worker.yaml"))
+    entries += [
         target("ManagedCluster", "cluster-placeholder", "patches/managedcluster.yaml"),
         target("KlusterletAddonConfig", "cluster-placeholder", "patches/klusterletaddonconfig.yaml"),
     ]
@@ -178,12 +185,13 @@ def generate_hive_patches(params: ClusterParams, hive_base_path: str = "../base/
         replace("/spec/clusterNamespace", n),
     ])
 
-    patches["patches/machinepool-worker.yaml"] = dump(
-        rename_ops(f"{n}-worker", n)
-        + [replace("/spec/clusterDeploymentRef/name", n)]
-        + provider.machinepool_ops(params)
-        + [replace("/spec/replicas", params.worker_replicas)]
-    )
+    if params.has_worker_pool:
+        patches["patches/machinepool-worker.yaml"] = dump(
+            rename_ops(f"{n}-worker", n)
+            + [replace("/spec/clusterDeploymentRef/name", n)]
+            + provider.machinepool_ops(params)
+            + [replace("/spec/replicas", params.worker_replicas)]
+        )
 
     patches["patches/managedcluster.yaml"] = dump([
         replace("/metadata/name", n),

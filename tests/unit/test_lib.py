@@ -541,3 +541,30 @@ class TestValidateProfile:
         with pytest.raises(ValueError, match="not found"):
             validate_profile("aws/nonexistent", str(tpl))
 
+# ===================== topology tests =====================
+
+
+class TestTopologyDefaults:
+    @pytest.mark.parametrize("topology,cp,workers", [("standard", 3, 3), ("compact", 3, 0), ("sno", 1, 0)])
+    def test_replica_defaults(self, topology, cp, workers):
+        p = ClusterParams(name="t", region="us-east-1", tier="base", topology=topology)
+        assert (p.control_plane_replicas, p.worker_replicas) == (cp, workers)
+
+    def test_explicit_replicas_win(self):
+        p = ClusterParams(name="t", region="us-east-1", tier="base", topology="compact", worker_replicas=2)
+        assert p.worker_replicas == 2
+
+    @pytest.mark.parametrize("topology", ["compact", "sno"])
+    def test_no_machinepool_without_worker_pool(self, topology):
+        p = ClusterParams(name="t", region="us-east-1", tier="base", topology=topology)
+        patches = generate_hive_patches(p)
+        assert "patches/machinepool-worker.yaml" not in patches
+        kinds = [e.get("target", {}).get("kind") for e in yaml.safe_load(patches["kustomization.yaml"])["patches"]]
+        assert "MachinePool" not in kinds
+
+    def test_zero_workers_omit_platform(self):
+        p = ClusterParams(name="t", region="us-east-1", tier="base", topology="compact")
+        ic = yaml.safe_load(generate_hive_patches(p)["patches/install-config.yaml"])
+        embedded = yaml.safe_load(ic["stringData"]["install-config.yaml"])
+        assert embedded["compute"] == [{"name": "worker", "replicas": 0}]
+
