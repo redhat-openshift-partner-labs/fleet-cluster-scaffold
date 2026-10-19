@@ -432,8 +432,8 @@ class TestClusterParams:
         params_default = ClusterParams(name="p", region="x", tier="t")
         assert params_default.profile == "aws/standard"
 
-        params_custom = ClusterParams(name="p", region="x", tier="t", topology="sno")
-        assert params_custom.profile == "aws/sno"
+        params_custom = ClusterParams(name="p", region="eastus", tier="t", cloud="azure", topology="sno")
+        assert params_custom.profile == "azure/sno"
 
     def test_base_domain_attr_available(self):
         params = ClusterParams(name="b", region="r", tier="t", base_domain="mydomain.com")
@@ -517,11 +517,10 @@ class TestValidateProfile:
         tpl.mkdir(parents=True)
         validate_profile("aws/standard", str(tmp_path / "cluster-templates"))
 
-    def test_rejects_azure(self, tmp_path):
+    def test_accepts_azure(self, tmp_path):
         tpl = tmp_path / "cluster-templates" / "azure" / "standard" / "hive"
         tpl.mkdir(parents=True)
-        with pytest.raises(ValueError, match="not supported"):
-            validate_profile("azure/standard", str(tmp_path / "cluster-templates"))
+        validate_profile("azure/standard", str(tmp_path / "cluster-templates"))
 
     def test_rejects_ibmcloud(self, tmp_path):
         tpl = tmp_path / "cluster-templates" / "ibmcloud" / "standard" / "hive"
@@ -540,6 +539,7 @@ class TestValidateProfile:
         tpl.mkdir()
         with pytest.raises(ValueError, match="not found"):
             validate_profile("aws/nonexistent", str(tpl))
+
 
 # ===================== topology tests =====================
 
@@ -568,3 +568,107 @@ class TestTopologyDefaults:
         embedded = yaml.safe_load(ic["stringData"]["install-config.yaml"])
         assert embedded["compute"] == [{"name": "worker", "replicas": 0}]
 
+
+# ===================== azure tests =====================
+
+SUB_ID = "11111111-2222-3333-4444-555555555555"
+
+
+@pytest.fixture()
+def azure_params():
+    return ClusterParams(
+        name="az-cluster",
+        region="eastus2",
+        tier="base",
+        cloud="azure",
+        provider_options={
+            "subscription_id": SUB_ID,
+            "base_domain_resource_group": "openshift-dns",
+            "cloud_name": "AzurePublicCloud",
+        },
+    )
+
+
+def _embedded_ic(patches):
+    return yaml.safe_load(yaml.safe_load(patches["patches/install-config.yaml"])["stringData"]["install-config.yaml"])
+
+
+class TestAzureHivePatches:
+    def test_defaults(self, azure_params):
+        assert azure_params.zones == ["1", "2", "3"]
+        assert azure_params.control_plane_type == "Standard_D8s_v5"
+        assert get_default_zones("eastus", cloud="azure") == ["1", "2", "3"]
+
+    def test_clusterdeployment_platform_ops(self, azure_params):
+        cd = yaml.safe_load(generate_hive_patches(azure_params)["patches/clusterdeployment.yaml"])
+        ops = {op["path"]: op["value"] for op in cd}
+        assert ops["/spec/platform/azure/region"] == "eastus2"
+        assert ops["/spec/platform/azure/baseDomainResourceGroupName"] == "openshift-dns"
+        assert not any("/aws/" in path for path in ops)
+
+    def test_install_config_platform(self, azure_params):
+        ic = _embedded_ic(generate_hive_patches(azure_params))
+        assert ic["platform"] == {"azure": {
+            "baseDomainResourceGroupName": "openshift-dns",
+            "cloudName": "AzurePublicCloud",
+            "region": "eastus2",
+            "resourceGroupName": "az-cluster-rg",
+        }}
+        assert ic["compute"][0]["platform"]["azure"]["osDisk"]["diskType"] == "Premium_LRS"
+
+    def test_zones_are_strings(self, azure_params):
+        azure_params.zones = [1, 2]
+        patches = generate_hive_patches(azure_params)
+        assert _embedded_ic(patches)["controlPlane"]["platform"]["azure"]["zones"] == ["1", "2"]
+        mp = yaml.safe_load(patches["patches/machinepool-worker.yaml"])
+        assert {op["path"]: op["value"] for op in mp}["/spec/platform/azure/zones"] == ["1", "2"]
+
+
+class TestAzureCrossplanePatches:
+    def test_returns_all_expected_files(self, azure_params):
+        assert set(generate_crossplane_patches(azure_params)) == {
+            "kustomization.yaml",
+            "patches/resource-group.yaml",
+            "patches/application.yaml",
+            "patches/service-principal.yaml",
+            "patches/client-secret.yaml",
+            "patches/role-assignment-contributor.yaml",
+            "patches/role-assignment-user-access-admin.yaml",
+            "patches/role-assignment-dns-zone-contributor.yaml",
+            "patches/role-assignment-reader.yaml",
+        }
+
+    def test_role_assignment_scopes(self, azure_params):
+        patches = generate_crossplane_patches(azure_params)
+
+        def scope(suffix):
+            ops = yaml.safe_load(patches[f"patches/role-assignment-{suffix}.yaml"])
+            return {op["path"]: op["value"] for op in ops}["/spec/forProvider/scope"]
+
+        rg = f"/subscriptions/{SUB_ID}/resourceGroups/az-cluster-rg"
+        assert scope("contributor") == rg
+        assert scope("user-access-admin") == rg
+        assert scope("dns-zone-contributor").endswith("/resourceGroups/openshift-dns/providers/Microsoft.Network/dnszones/openshiftpartnerlabs.com")
+        assert scope("reader") == f"/subscriptions/{SUB_ID}"
+
+    def test_refs_and_secret_namespace(self, azure_params):
+        patches = generate_crossplane_patches(azure_params)
+        sp = {op["path"]: op["value"] for op in yaml.safe_load(patches["patches/service-principal.yaml"])}
+        pw = {op["path"]: op["value"] for op in yaml.safe_load(patches["patches/client-secret.yaml"])}
+        assert sp["/spec/forProvider/clientIdRef/name"] == "az-cluster-ocp-installer"
+        assert pw["/spec/forProvider/applicationIdRef/name"] == "az-cluster-ocp-installer"
+        assert pw["/spec/writeConnectionSecretToRef/namespace"] == "az-cluster"
+
+    def test_kustomization_targets_scoped_by_group(self, azure_params):
+        kust = yaml.safe_load(generate_crossplane_patches(azure_params)["kustomization.yaml"])
+        password = [e for e in kust["patches"] if e["target"]["kind"] == "Password"][0]
+        assert password["target"]["group"] == "applications.azuread.upbound.io"
+
+
+class TestAzureValidation:
+    def test_rejects_bad_subscription(self, azure_params):
+        from scaffold.providers import get_provider
+
+        azure_params.provider_options["subscription_id"] = "nope"
+        with pytest.raises(ValueError, match="UUID"):
+            get_provider("azure").validate(azure_params)

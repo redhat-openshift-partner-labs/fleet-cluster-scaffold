@@ -392,5 +392,66 @@ def test_topology_selects_template_and_replicas(tmp_path):
     assert embedded["compute"][0] == {"name": "worker", "replicas": 0}
 
 
+# ======== Azure tests ========
+
+SUB_ID = "11111111-2222-3333-4444-555555555555"
+
+
+def _azure_args(tmp_path, name="az-cluster", *extra):
+    (tmp_path / "cluster-templates" / "azure" / "standard").mkdir(parents=True, exist_ok=True)
+    return [
+        "azure",
+        "--name", name,
+        "--region", "eastus2",
+        "--tier", "base",
+        "--subscription-id", SUB_ID,
+        "--base-path", str(tmp_path),
+        "--cluster-templates-dir", str(tmp_path / "cluster-templates"),
+        "--skip-validation",
+        *extra,
+    ]
+
+
+def test_azure_requires_subscription_id(tmp_path):
+    args = _azure_args(tmp_path)
+    i = args.index("--subscription-id")
+    with pytest.raises(SystemExit):
+        main(args[:i] + args[i + 2:])
+
+
+def test_azure_rejects_invalid_subscription_id(tmp_path):
+    args = _azure_args(tmp_path)
+    args[args.index(SUB_ID)] = "not-a-uuid"
+    assert main(args) == 1
+
+
+def test_azure_scaffold_uses_azure_defaults(tmp_path):
+    assert main(_azure_args(tmp_path)) == 0
+    hive = tmp_path / "az-cluster" / "hive"
+    kust = yaml.safe_load((hive / "kustomization.yaml").read_text())
+    assert "azure/standard/hive" in kust["resources"][0]
+    ic = yaml.safe_load((hive / "patches" / "install-config.yaml").read_text())
+    embedded = yaml.safe_load(ic["stringData"]["install-config.yaml"])
+    assert embedded["controlPlane"]["platform"]["azure"]["type"] == "Standard_D8s_v5"
+    assert embedded["controlPlane"]["platform"]["azure"]["zones"] == ["1", "2", "3"]
+    assert embedded["platform"]["azure"]["resourceGroupName"] == "az-cluster-rg"
+    assert (tmp_path / "az-cluster" / "crossplane" / "patches" / "role-assignment-contributor.yaml").exists()
+
+
+def test_azure_flags_forwarded(tmp_path):
+    main(_azure_args(
+        tmp_path, "az2",
+        "--base-domain-resource-group", "dns-rg",
+        "--cloud-name", "AzureUSGovernmentCloud",
+        "--worker-type", "Standard_D16s_v5",
+    ))
+    cd = yaml.safe_load((tmp_path / "az2" / "hive" / "patches" / "clusterdeployment.yaml").read_text())
+    ops = {op["path"]: op["value"] for op in cd}
+    assert ops["/spec/platform/azure/baseDomainResourceGroupName"] == "dns-rg"
+    assert ops["/spec/platform/azure/cloudName"] == "AzureUSGovernmentCloud"
+    mp = yaml.safe_load((tmp_path / "az2" / "hive" / "patches" / "machinepool-worker.yaml").read_text())
+    assert {op["path"]: op["value"] for op in mp}["/spec/platform/azure/type"] == "Standard_D16s_v5"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
