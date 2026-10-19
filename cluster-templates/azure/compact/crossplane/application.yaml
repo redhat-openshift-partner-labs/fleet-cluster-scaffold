@@ -1,0 +1,13 @@
+apiVersion: applications.azuread.upbound.io/v1beta2
+kind: Application
+metadata:
+  name: cluster-placeholder-ocp-installer
+  namespace: cluster-placeholder
+spec:
+  forProvider:
+    displayName: cluster-placeholder-ocp-installer
+    tags:
+      - OpenShift-Installer
+      - CreatedBy-Crossplane
+  providerConfigRef:
+    name: default

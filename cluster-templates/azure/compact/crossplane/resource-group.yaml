@@ -1,0 +1,16 @@
+# Empty, installer-owned resource group (install-config platform.azure.resourceGroupName).
+# Installer RBAC is scoped here instead of the whole subscription.
+apiVersion: azure.upbound.io/v1beta1
+kind: ResourceGroup
+metadata:
+  name: cluster-placeholder-rg
+  namespace: cluster-placeholder
+spec:
+  forProvider:
+    location: eastus
+    tags:
+      Purpose: OpenShift-Installer
+      CreatedBy: Crossplane
+      Product: OpenShift
+  providerConfigRef:
+    name: default

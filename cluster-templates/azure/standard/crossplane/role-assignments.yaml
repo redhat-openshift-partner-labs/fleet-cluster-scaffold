@@ -1,0 +1,74 @@
+# provider-azure cannot reference a provider-azuread Principal, so principalId is a placeholder.
+# Created paused: the fleet Tekton pipeline must replace principalId with the Principal's
+# status.atProvider.objectId and remove the crossplane.io/paused annotation.
+#
+# Scopes: Contributor + User Access Administrator on the cluster resource group only,
+# DNS Zone Contributor on the base domain zone, Reader on the subscription (installer
+# SKU/quota/region validation).
+apiVersion: authorization.azure.upbound.io/v1beta1
+kind: RoleAssignment
+metadata:
+  name: cluster-placeholder-contributor
+  namespace: cluster-placeholder
+  annotations:
+    crossplane.io/paused: "true"
+spec:
+  forProvider:
+    principalId: principal-id-placeholder
+    principalType: ServicePrincipal
+    skipServicePrincipalAadCheck: true
+    roleDefinitionName: Contributor
+    scope: /subscriptions/subscription-placeholder/resourceGroups/cluster-placeholder-rg
+  providerConfigRef:
+    name: default
+---
+apiVersion: authorization.azure.upbound.io/v1beta1
+kind: RoleAssignment
+metadata:
+  name: cluster-placeholder-user-access-admin
+  namespace: cluster-placeholder
+  annotations:
+    crossplane.io/paused: "true"
+spec:
+  forProvider:
+    principalId: principal-id-placeholder
+    principalType: ServicePrincipal
+    skipServicePrincipalAadCheck: true
+    roleDefinitionName: User Access Administrator
+    scope: /subscriptions/subscription-placeholder/resourceGroups/cluster-placeholder-rg
+  providerConfigRef:
+    name: default
+---
+apiVersion: authorization.azure.upbound.io/v1beta1
+kind: RoleAssignment
+metadata:
+  name: cluster-placeholder-dns-zone-contributor
+  namespace: cluster-placeholder
+  annotations:
+    crossplane.io/paused: "true"
+spec:
+  forProvider:
+    principalId: principal-id-placeholder
+    principalType: ServicePrincipal
+    skipServicePrincipalAadCheck: true
+    roleDefinitionName: DNS Zone Contributor
+    scope: /subscriptions/subscription-placeholder/resourceGroups/openshift-dns/providers/Microsoft.Network/dnszones/openshiftpartnerlabs.com
+  providerConfigRef:
+    name: default
+---
+apiVersion: authorization.azure.upbound.io/v1beta1
+kind: RoleAssignment
+metadata:
+  name: cluster-placeholder-reader
+  namespace: cluster-placeholder
+  annotations:
+    crossplane.io/paused: "true"
+spec:
+  forProvider:
+    principalId: principal-id-placeholder
+    principalType: ServicePrincipal
+    skipServicePrincipalAadCheck: true
+    roleDefinitionName: Reader
+    scope: /subscriptions/subscription-placeholder
+  providerConfigRef:
+    name: default
