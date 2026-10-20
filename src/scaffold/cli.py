@@ -53,6 +53,12 @@ def _common_parser() -> argparse.ArgumentParser:
     common.add_argument("--worker-replicas", type=int, default=None, help="Default: 3, or 0 for compact/sno")
 
     common.add_argument("--image-set", default="img4.21.13-x86-64-appsub", help="ClusterImageSet name (default: %(default)s)")
+    common.add_argument(
+        "--install-attempts-limit",
+        type=int,
+        default=1,
+        help="Hive install attempts before the ClusterDeployment fails (default: %(default)s)",
+    )
     common.add_argument("--zones", default=None, help="Comma-separated zone list (default: provider-specific)")
     common.add_argument(
         "--htpasswd-provider-name",
@@ -108,6 +114,8 @@ def main(args=None) -> int:  # pylint: disable=too-many-return-statements
 
     try:
         validate_cluster_name(parsed.name)
+        if parsed.install_attempts_limit < 1:
+            raise ValueError("--install-attempts-limit must be at least 1.")
         params = ClusterParams(
             name=parsed.name,
             region=parsed.region,
@@ -123,6 +131,7 @@ def main(args=None) -> int:  # pylint: disable=too-many-return-statements
             image_set=parsed.image_set,
             zones=parsed.zones.split(",") if parsed.zones else None,
             htpasswd_provider_name=parsed.htpasswd_provider_name,
+            install_attempts_limit=parsed.install_attempts_limit,
             provider_options=provider.options_from_args(parsed),
         )
         provider.validate(params)

@@ -167,6 +167,7 @@ def generate_hive_patches(params: ClusterParams, hive_base_path: str = "../base/
             replace("/spec/provisioning/installConfigSecretRef/name", f"{n}-install-config"),
             replace("/spec/provisioning/sshPrivateKeySecretRef/name", f"{n}-ssh-key"),
             replace("/spec/provisioning/imageSetRef/name", params.image_set),
+            {"op": "add", "path": "/spec/installAttemptsLimit", "value": params.install_attempts_limit},
         ]
     )
 
