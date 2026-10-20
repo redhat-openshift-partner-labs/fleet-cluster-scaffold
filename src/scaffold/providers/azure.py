@@ -10,6 +10,7 @@ remove the crossplane.io/paused annotation.
 from __future__ import annotations
 
 import argparse
+import logging
 import re
 from typing import TYPE_CHECKING
 
@@ -17,6 +18,8 @@ if TYPE_CHECKING:  # type-only: params imports providers at runtime
     from scaffold.params import ClusterParams
 
 from scaffold.providers.base import Provider, dump, rename_ops, replace, target
+
+_LOG = logging.getLogger("scaffold")
 
 _UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$")
 
@@ -72,6 +75,11 @@ class AzureProvider(Provider):
             raise ValueError(f"Azure subscription ID {sub!r} is not a valid UUID.")
         if params.base_domain.lower() != params.base_domain:
             raise ValueError("Azure DNS zone names (--base-domain) must be lowercase.")
+        _LOG.warning(
+            "WARNING: Azure clusters use passthrough credentials: the installer service principal is stored on "
+            "the spoke (kube-system/azure-credentials), and it can write the shared --base-domain DNS zone, "
+            "so any cluster-admin can change other clusters' DNS records. The fleet pipeline does not support Azure yet."
+        )
 
     def default_zones(self, region: str) -> list[str]:
         return ["1", "2", "3"]

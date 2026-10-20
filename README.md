@@ -38,7 +38,7 @@ fleet-scaffold-cluster CLOUD --name NAME --region REGION --tier TIER [options]
 | Cloud      | Status              |
 |------------|---------------------|
 | `aws`      | Supported           |
-| `azure`    | Supported           |
+| `azure`    | Not ready (see [Azure status](#azure-status)) |
 | `gcp`      | Planned (exits 1)   |
 | `ibmcloud` | Planned (exits 1)   |
 
@@ -186,6 +186,14 @@ fleet-scaffold-cluster azure \
   --subscription-id 00000000-0000-0000-0000-000000000000 \
   --base-domain-resource-group openshift-dns
 ```
+
+#### Azure status
+
+The scaffold generates Azure overlays, but they must not be used for partner clusters yet:
+
+- **Credentials reach the spoke.** install-config sets no `credentialsMode`, so OpenShift uses passthrough and stores the installer service principal in `kube-system/azure-credentials`. That principal is DNS Zone Contributor on the **shared** `--base-domain` zone. Any partner cluster-admin can rewrite other clusters' `api`/`*.apps` records, or add `_acme-challenge` records to get certificates for them. Its subscription-wide Reader role also exposes every other cluster's resources. This breaks the isolation rule AWS follows (see [AWS credentials](#aws-credentials-cluster-scoped-default)). The fix is the same model: `credentialsMode: Manual`, the installer principal stays on the hub, and per-operator principals scoped to `<name>-rg` and the cluster's own DNS record sets.
+- **The fleet pipeline has no Azure support.** No Azure Crossplane providers on the hub, no RoleAssignment binding, no `azure-credentials` Secret, and no teardown of the Azure managed resources.
+- **fleet-clusters' `cluster-templates/azure` is stale.** Validation now rejects overlays built against it.
 
 #### Azure credential flow
 
