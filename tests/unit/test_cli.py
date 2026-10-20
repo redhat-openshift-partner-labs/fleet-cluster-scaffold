@@ -519,3 +519,26 @@ def test_azure_flags_forwarded(tmp_path):
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+# ======== Install attempts tests ========
+
+
+def _cd_ops(cluster_dir):
+    cd = yaml.safe_load((cluster_dir / "hive" / "patches" / "clusterdeployment.yaml").read_text())
+    return {op["path"]: op["value"] for op in cd}
+
+
+def test_install_attempts_limit_defaults_to_one(tmp_path):
+    assert main(_aws_args(tmp_path, "ia1")) == 0
+    assert _cd_ops(tmp_path / "ia1")["/spec/installAttemptsLimit"] == 1
+
+
+def test_install_attempts_limit_override(tmp_path):
+    assert main(_aws_args(tmp_path, "ia3", "--install-attempts-limit", "3")) == 0
+    assert _cd_ops(tmp_path / "ia3")["/spec/installAttemptsLimit"] == 3
+
+
+def test_install_attempts_limit_rejects_zero(tmp_path):
+    assert main(_aws_args(tmp_path, "ia0", "--install-attempts-limit", "0")) == 1
+    assert not (tmp_path / "ia0").exists()
