@@ -14,6 +14,8 @@ Given a cloud, cluster name, region, and tier, `fleet-scaffold-cluster` generate
 
 Each overlay references shared base resources in `cluster-templates/<cloud>/<topology>/` via relative paths, so clusters stay lightweight while sharing common definitions.
 
+Every generated resource carries the label `openshiftpartnerlabs.com/cluster=<name>`. The Crossplane managed resources are cluster-scoped, so deleting the cluster namespace does not remove them. Teardown should select them by this label (for example `oc get managed -l openshiftpartnerlabs.com/cluster=<name>`) instead of a hard-coded name list.
+
 ## Requirements
 
 - Python 3.11+

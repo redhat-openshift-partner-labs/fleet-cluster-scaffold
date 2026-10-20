@@ -51,6 +51,14 @@ class TestGenerateHivePatches:
         }
         assert set(patches.keys()) == expected_files
 
+    def test_kustomization_labels_every_resource_with_cluster(self, params):
+        for kust_raw in (generate_hive_patches(params)["kustomization.yaml"],
+                         generate_crossplane_patches(params)["kustomization.yaml"]):
+            kust = yaml.safe_load(kust_raw)
+            assert kust["labels"] == [
+                {"pairs": {"openshiftpartnerlabs.com/cluster": "my-cluster"}, "includeSelectors": False}
+            ]
+
     def test_kustomization_namespace(self, params):
         patches = generate_hive_patches(params)
         kust = yaml.safe_load(patches["kustomization.yaml"])
