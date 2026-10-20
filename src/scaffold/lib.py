@@ -19,6 +19,7 @@ from scaffold.providers.base import CLUSTER_LABEL, dump, rename_ops, replace, ta
 __all__ = [
     "ClusterParams",
     "TOPOLOGY_REPLICAS",
+    "find_unpatched",
     "generate_crossplane_patches",
     "generate_hive_patches",
     "generate_metadata",
@@ -40,6 +41,15 @@ def _literal_str_representer(dumper, data):
 yaml.add_representer(_LiteralStr, _literal_str_representer)
 
 _DNS_LABEL_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
+
+# Base-template values every overlay must replace. A survivor means a patch target matched nothing,
+# which kustomize does not report. INFRA_ID/VPC_ID/principal-id placeholders are bound later by fleet.
+_UNPATCHED_RE = re.compile(r"\b(?:cluster|subscription)-placeholder[a-z0-9-]*")
+
+
+def find_unpatched(rendered: str) -> list[str]:
+    """Return the base-template placeholder names left in *rendered* kustomize output."""
+    return sorted(set(_UNPATCHED_RE.findall(rendered)))
 
 
 def validate_cluster_name(name: str) -> None:

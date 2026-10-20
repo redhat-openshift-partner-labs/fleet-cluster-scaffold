@@ -55,7 +55,7 @@ fleet-scaffold-cluster azure --name my-cluster --region eastus2 --tier base \
   --subscription-id 00000000-0000-0000-0000-000000000000
 ```
 
-This creates `./my-cluster/` with the full Kustomize overlay structure and validates it with `kustomize build`.
+This creates `./my-cluster/` with the full Kustomize overlay structure and validates it with `kustomize build`. Validation also fails if any base-template name (`cluster-placeholder*`, `subscription-placeholder`) survives the build. That means a patch matched nothing, usually because `--cluster-templates-dir` points at stale templates; kustomize itself does not report this. The pipeline-bound placeholders (`INFRA_ID_PLACEHOLDER`, `VPC_ID_PLACEHOLDER`, `principal-id-placeholder`) are expected.
 
 ### Common arguments (all clouds)
 
