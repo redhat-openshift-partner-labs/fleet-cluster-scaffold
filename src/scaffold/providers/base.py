@@ -11,6 +11,10 @@ if TYPE_CHECKING:  # type-only: params imports providers at runtime
     from scaffold.params import ClusterParams
 
 
+# Ownership label on every overlay resource (selector for per-cluster teardown)
+CLUSTER_LABEL = "openshiftpartnerlabs.com/cluster"
+
+
 def dump(obj: Any) -> str:
     return yaml.dump(obj, default_flow_style=False, sort_keys=False)
 

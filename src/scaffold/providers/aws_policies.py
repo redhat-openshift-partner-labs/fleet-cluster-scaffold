@@ -31,7 +31,10 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-TAG_KEY = "openshiftpartnerlabs.com/cluster"
+from scaffold.providers.base import CLUSTER_LABEL
+
+# Same key as the hub ownership label, so one name identifies a cluster in AWS and on the hub
+TAG_KEY = CLUSTER_LABEL
 
 # Substituted post-install by the fleet pipeline (scope-aws-credentials task)
 INFRA_ID_PLACEHOLDER = "INFRA_ID_PLACEHOLDER"

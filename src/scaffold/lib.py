@@ -14,7 +14,7 @@ import yaml
 
 from scaffold.params import TOPOLOGY_REPLICAS, ClusterParams
 from scaffold.providers import PROVIDERS, get_provider
-from scaffold.providers.base import dump, rename_ops, replace, target
+from scaffold.providers.base import CLUSTER_LABEL, dump, rename_ops, replace, target
 
 __all__ = [
     "ClusterParams",
@@ -102,6 +102,8 @@ def _kustomization(namespace: str, base_path: str, patches: list[dict]) -> str:
         "apiVersion": "kustomize.config.k8s.io/v1beta1",
         "kind": "Kustomization",
         "namespace": namespace,
+        # Crossplane MRs are cluster-scoped and outlive the namespace; teardown selects them by this label
+        "labels": [{"pairs": {CLUSTER_LABEL: namespace}, "includeSelectors": False}],
         "resources": [base_path],
         "patches": patches,
     })
