@@ -14,7 +14,14 @@ import shutil
 import subprocess
 import sys
 
-from scaffold.lib import TOPOLOGY_REPLICAS, ClusterParams, validate_cluster_name, validate_profile, write_cluster_dir
+from scaffold.lib import (
+    TOPOLOGY_REPLICAS,
+    ClusterParams,
+    find_unpatched,
+    validate_cluster_name,
+    validate_profile,
+    write_cluster_dir,
+)
 from scaffold.providers import PROVIDERS
 
 _LOG = logging.getLogger("scaffold")
@@ -168,6 +175,14 @@ def main(args=None) -> int:  # pylint: disable=too-many-return-statements
         )
         if result.returncode != 0:
             _LOG.error("kustomize build %s failed: %s", path, result.stderr)
+            return 1
+        leftover = find_unpatched(result.stdout)
+        if leftover:
+            _LOG.error(
+                "kustomize build %s left base-template names unpatched: %s. The overlay patches do not match "
+                "the base in %s (stale cluster-templates?).",
+                path, ", ".join(leftover), os.path.join(parsed.cluster_templates_dir, params.profile),
+            )
             return 1
         _LOG.info("  -> %s: OK", subdir)
 

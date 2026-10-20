@@ -1,3 +1,5 @@
+import os
+import shutil
 import subprocess
 from unittest import mock
 
@@ -542,3 +544,45 @@ def test_install_attempts_limit_override(tmp_path):
 def test_install_attempts_limit_rejects_zero(tmp_path):
     assert main(_aws_args(tmp_path, "ia0", "--install-attempts-limit", "0")) == 1
     assert not (tmp_path / "ia0").exists()
+
+
+# ======== Unpatched base-template detection ========
+
+REPO_TEMPLATES = os.path.join(os.path.dirname(__file__), "..", "..", "cluster-templates")
+_AZURE_SUB = "00000000-0000-0000-0000-000000000000"
+needs_kustomize = pytest.mark.skipif(shutil.which("kustomize") is None, reason="kustomize not installed")
+
+
+def _validate_args(tmp_path, cloud, topology, templates):
+    extra = ["--subscription-id", _AZURE_SUB] if cloud == "azure" else []
+    region = "eastus2" if cloud == "azure" else "us-east-2"
+    return [
+        cloud, "--name", f"v-{topology}", "--region", region, "--tier", "base", "--topology", topology,
+        "--base-path", str(tmp_path / "out"), "--cluster-templates-dir", str(templates), *extra,
+    ]
+
+
+@mock.patch("scaffold.cli.shutil.which", return_value="/usr/bin/kustomize")
+@mock.patch("scaffold.cli.subprocess.run")
+def test_validation_fails_when_base_names_survive(mock_run, _which, default_args):
+    mock_run.return_value = subprocess.CompletedProcess(
+        [], returncode=0, stdout="metadata:\n  name: cluster-placeholder-federated-cred\n", stderr=""
+    )
+    assert main(default_args) == 1
+
+
+@needs_kustomize
+@pytest.mark.parametrize("cloud", ["aws", "azure"])
+@pytest.mark.parametrize("topology", ["standard", "compact", "sno"])
+def test_repo_templates_render_without_base_names(cloud, topology, tmp_path):
+    assert main(_validate_args(tmp_path, cloud, topology, REPO_TEMPLATES)) == 0
+
+
+@needs_kustomize
+def test_stale_base_is_rejected(tmp_path):
+    """A base whose resource names differ from the patch targets renders fine but must fail validation."""
+    templates = tmp_path / "cluster-templates"
+    shutil.copytree(os.path.join(REPO_TEMPLATES, "azure"), templates / "azure")
+    rg = templates / "azure" / "standard" / "crossplane" / "resource-group.yaml"
+    rg.write_text(rg.read_text().replace("name: cluster-placeholder-rg", "name: cluster-placeholder-old-rg"))
+    assert main(_validate_args(tmp_path, "azure", "standard", templates)) == 1
