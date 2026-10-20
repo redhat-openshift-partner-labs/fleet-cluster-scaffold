@@ -80,6 +80,11 @@ class TestGenerateHivePatches:
         ]
         assert regions == ["us-east-2"]
 
+    def test_clusterdeployment_patch_has_base_domain(self, params):
+        params.base_domain = "example.org"
+        cd = yaml.safe_load(generate_hive_patches(params)["patches/clusterdeployment.yaml"])
+        assert [op["value"] for op in cd if op["path"] == "/spec/baseDomain"] == ["example.org"]
+
     def test_clusterdeployment_patch_has_image_set(self, params):
         patches = generate_hive_patches(params)
         cd = yaml.safe_load(patches["patches/clusterdeployment.yaml"])

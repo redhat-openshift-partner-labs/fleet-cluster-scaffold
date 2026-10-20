@@ -160,7 +160,8 @@ def generate_hive_patches(params: ClusterParams, hive_base_path: str = "../base/
 
     patches["patches/clusterdeployment.yaml"] = dump(
         rename_ops(n, n)
-        + [replace("/spec/clusterName", n)]
+        # baseDomain must match install-config; post-provision derives DNS zones from it
+        + [replace("/spec/clusterName", n), replace("/spec/baseDomain", params.base_domain)]
         + provider.clusterdeployment_ops(params)
         + [
             replace("/spec/provisioning/installConfigSecretRef/name", f"{n}-install-config"),
