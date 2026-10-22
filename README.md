@@ -70,7 +70,7 @@ This creates `./my-cluster/` with the full Kustomize overlay structure and valid
 | `--control-plane-type`     | cloud-specific               | Instance type for control plane nodes                        |
 | `--worker-type`            | cloud-specific               | Instance type for worker nodes                               |
 | `--control-plane-replicas` | topology-specific            | `3` (standard, compact) or `1` (sno)                         |
-| `--worker-replicas`        | topology-specific            | `3` (standard) or `0` (compact, sno)                         |
+| `--worker-replicas`        | topology-specific            | `3` (standard) or `0` (compact, sno; must stay `0`, they have no worker MachinePool) |
 | `--image-set`              | `img4.21.13-x86-64-appsub`   | OpenShift ClusterImageSet name                               |
 | `--zones`                  | cloud-specific               | Comma-separated zone list                                    |
 | `--install-attempts-limit` | `1`                          | Hive install attempts before the ClusterDeployment fails; failed installs need a human retrigger |

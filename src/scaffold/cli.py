@@ -141,6 +141,12 @@ def main(args=None) -> int:  # pylint: disable=too-many-return-statements
             install_attempts_limit=parsed.install_attempts_limit,
             provider_options=provider.options_from_args(parsed),
         )
+        # compact/sno bases have no worker MachinePool, so Hive could not manage installer-created workers
+        if params.worker_replicas and not params.has_worker_pool:
+            raise ValueError(
+                f"--worker-replicas {params.worker_replicas} needs a worker MachinePool, which the "
+                f"{params.topology} topology does not have. Use --topology standard."
+            )
         provider.validate(params)
         validate_profile(params.profile, parsed.cluster_templates_dir)
     except ValueError as exc:
