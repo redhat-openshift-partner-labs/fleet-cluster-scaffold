@@ -575,11 +575,13 @@ class TestTopologyDefaults:
         kinds = [e.get("target", {}).get("kind") for e in yaml.safe_load(patches["kustomization.yaml"])["patches"]]
         assert "MachinePool" not in kinds
 
-    def test_zero_workers_omit_platform(self):
+    def test_zero_workers_include_worker_platform(self):
         p = ClusterParams(name="t", region="us-east-1", tier="base", topology="compact")
         ic = yaml.safe_load(generate_hive_patches(p)["patches/install-config.yaml"])
         embedded = yaml.safe_load(ic["stringData"]["install-config.yaml"])
-        assert embedded["compute"] == [{"name": "worker", "replicas": 0}]
+        assert embedded["compute"][0]["name"] == "worker"
+        assert embedded["compute"][0]["replicas"] == 0
+        assert embedded["compute"][0]["platform"]["aws"]["iamRole"] == "t-worker-role"
 
 
 # ===================== azure tests =====================

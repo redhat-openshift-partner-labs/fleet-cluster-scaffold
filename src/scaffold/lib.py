@@ -125,7 +125,7 @@ def _install_config(params: ClusterParams) -> dict:
     provider = get_provider(params.cloud)
     cp_platform, worker_platform, platform = provider.install_config_platforms(params)
     worker: dict = {"name": "worker"}
-    if params.worker_replicas:
+    if worker_platform:
         worker["platform"] = worker_platform
     worker["replicas"] = params.worker_replicas
     return {
