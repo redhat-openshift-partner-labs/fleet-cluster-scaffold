@@ -230,3 +230,64 @@ class TestComponents:
                     targets[d["metadata"]["name"]] = (d["spec"]["secretRef"]["namespace"], d["spec"]["secretRef"]["name"])
         for c in pol.COMPONENTS:
             assert targets[c.credentials_request] == (c.namespace, c.secret), c.key
+
+
+class TestCrossClusterIsolation:
+    """No policy of one cluster may match the resources of a cluster whose name extends it.
+
+    Names identical in the first 21 characters share an infra prefix and collide by design; fleet
+    rejects those before provisioning.
+    """
+
+    OWN = "acme"
+    SIBLINGS = ("acme-2", "acme-prod", "acmex")
+    ACCOUNT = "123456789012"
+
+    @classmethod
+    def _cluster_resources(cls, name: str) -> list[str]:
+        """Names the installer and operators really create (infra ID suffix is random)."""
+        infra = f"{pol.infra_prefix(name)}-k3x9q"
+        iam = f"arn:aws:iam::{cls.ACCOUNT}"
+        bucket = f"arn:aws:s3:::{infra}-image-registry-us-east-2-abcdefghijkl"
+        return [
+            *(f"{iam}:instance-profile/{infra}-{r}-profile" for r in ("master", "worker")),
+            *(f"{iam}:role/{name}-{r}-role" for r in ("master", "worker")),
+            *(f"{iam}:user/{name}-{c.key}" for c in pol.COMPONENTS),
+            bucket, f"{bucket}/docker/registry/v2",
+            f"router.apps.{name}.{DOMAIN}",
+        ]
+
+    @classmethod
+    def _policies(cls) -> dict[str, dict]:
+        docs = {c.key: pol.component_policy(c.key, cls.OWN, REGION, DOMAIN) for c in pol.COMPONENTS}
+        docs["master-role"] = pol.master_role_policy(cls.OWN, REGION, DOMAIN)
+        docs["worker-role"] = pol.worker_role_policy()
+        docs["installer"] = pol.installer_policy(cls.OWN)
+        return docs
+
+    @staticmethod
+    def _patterns(doc: dict):
+        """Wildcard-capable values: Resources and *Like condition values."""
+        for st in _statements(doc):
+            for r in _as_list(st["Resource"]):
+                if r != "*":  # account-wide statements are reads or conditioned (TestSpokeInvariants)
+                    yield st["Sid"], r
+            for op, kv in st.get("Condition", {}).items():
+                if "Like" in op:
+                    for v in kv.values():
+                        for p in _as_list(v):
+                            yield st["Sid"], p
+
+    def _hits(self, targets: list[str]) -> list[tuple[str, str, str, str]]:
+        # IAM '*' and '?' match like fnmatch's; no policy value contains '['
+        return [(label, sid, p, t) for label, doc in self._policies().items() for sid, p in self._patterns(doc)
+                for t in targets if fnmatch.fnmatchcase(t, p)]
+
+    @pytest.mark.parametrize("sibling", SIBLINGS)
+    def test_no_pattern_matches_sibling_cluster(self, sibling):
+        assert not self._hits(self._cluster_resources(sibling))
+
+    def test_patterns_match_own_cluster(self):
+        """Control: the patterns are not vacuous."""
+        matched = {t for *_, t in self._hits(self._cluster_resources(self.OWN))}
+        assert matched == set(self._cluster_resources(self.OWN))
