@@ -4,7 +4,7 @@ Every credential that reaches the spoke (per-operator IAM users, node roles) is 
 resources owned by its cluster:
 
 - instances: ec2:InstanceProfile must be one of the cluster's instance profiles
-  (<infra prefix>-{master,worker}-profile, created by the installer from the BYO roles)
+  (<infra ID>-{master,worker}-profile, matched exactly by infra_id_pattern; created by the installer from the BYO roles)
 - volumes, snapshots, security groups, subnets, VPCs, load balancers: the ownership tag
   TAG_KEY=<cluster name>, applied by the installer (userTags) and propagated to operator-created
   resources (propagateUserTags)
@@ -133,7 +133,8 @@ class _Scope:
         self.region = region
         self.base_domain = base_domain
         self.roles = node_role_arns(name)
-        self.own_profile = {"ArnLike": {"ec2:InstanceProfile": f"arn:aws:iam::*:instance-profile/{self.prefix}-*"}}
+        self.own_profile = {"ArnLike": {"ec2:InstanceProfile": [
+            f"arn:aws:iam::*:instance-profile/{infra_id_pattern(name)}-{role}-profile" for role in ("master", "worker")]}}
         self.ec2_owned = {"StringEquals": {f"ec2:ResourceTag/{TAG_KEY}": name}}
         # aws:ResourceTag: supported by both classic ELB and ELBv2 actions
         self.elb_owned = {"StringEquals": {f"aws:ResourceTag/{TAG_KEY}": name}}

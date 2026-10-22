@@ -109,7 +109,8 @@ class TestSpokeInvariants:
                     assert st["Condition"] == {"StringEquals": {"iam:PassedToService": "ec2.amazonaws.com"}}
 
     def test_instance_mutation_requires_cluster_profile(self):
-        profile = {"ArnLike": {"ec2:InstanceProfile": f"arn:aws:iam::*:instance-profile/{PREFIX}-*"}}
+        profile = {"ArnLike": {"ec2:InstanceProfile": [f"arn:aws:iam::*:instance-profile/{PREFIX}-?????-master-profile",
+                                                        f"arn:aws:iam::*:instance-profile/{PREFIX}-?????-worker-profile"]}}
         for label, doc in _spoke_policies().items():
             for st in _statements(doc):
                 if st["Resource"] == pol._ec2("instance") and set(_as_list(st["Action"])) & {
