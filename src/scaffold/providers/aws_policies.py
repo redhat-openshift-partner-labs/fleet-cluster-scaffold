@@ -10,7 +10,7 @@ resources owned by its cluster:
   resources (propagateUserTags)
 - only create-time requests may set the ownership tag, so a spoke cannot claim a foreign
   resource by tagging it
-- S3: buckets prefixed with the infra prefix; Route53: records under *.apps.<cluster>.<domain>
+- S3: buckets named <infra ID>-image-registry-*; Route53: records under *.apps.<cluster>.<domain>
 
 The installer's infra ID and VPC are unknown until install, so policies carry
 INFRA_ID_PLACEHOLDER / VPC_ID_PLACEHOLDER, which match nothing (fail closed) until the fleet
@@ -129,7 +129,6 @@ class _Scope:
 
     def __init__(self, name: str, region: str, base_domain: str) -> None:
         self.name = name
-        self.prefix = infra_prefix(name)
         self.region = region
         self.base_domain = base_domain
         self.roles = node_role_arns(name)
@@ -201,13 +200,15 @@ def _cco_iam_ro(s: _Scope) -> dict:
 
 
 def _image_registry(s: _Scope) -> dict:
+    # Operator bucket name: <infraID>-image-registry-<region>-<random>
+    bucket = f"arn:aws:s3:::{infra_id_pattern(s.name)}-image-registry-*"
     return _doc(_stmt("ClusterBuckets", [
         "s3:CreateBucket", "s3:DeleteBucket", "s3:PutBucketTagging", "s3:GetBucketTagging",
         "s3:PutBucketPublicAccessBlock", "s3:GetBucketPublicAccessBlock", "s3:PutEncryptionConfiguration",
         "s3:GetEncryptionConfiguration", "s3:PutLifecycleConfiguration", "s3:GetLifecycleConfiguration",
         "s3:GetBucketLocation", "s3:ListBucket", "s3:GetObject", "s3:PutObject", "s3:DeleteObject",
         "s3:ListBucketMultipartUploads", "s3:AbortMultipartUpload", "s3:ListMultipartUploadParts",
-    ], [f"arn:aws:s3:::{s.prefix}-*", f"arn:aws:s3:::{s.prefix}-*/*"]))
+    ], [bucket, f"{bucket}/*"]))
 
 
 def _ingress(s: _Scope) -> dict:
