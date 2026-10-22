@@ -31,3 +31,4 @@ docs/plans
 .mcp.json
 fleet/
 .codex/
+.taskmaster/
