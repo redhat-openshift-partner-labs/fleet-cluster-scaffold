@@ -63,6 +63,11 @@ class TestInfraPrefix:
     def test_matches_installer_infra_id_base(self, name, expected):
         assert pol.infra_prefix(name) == expected
 
+    def test_infra_id_pattern_matches_only_own_infra_id(self):
+        pattern = pol.infra_id_pattern("0171d46a-scopedaws")
+        assert fnmatch.fnmatchcase("0171d46a-scopedaws-fz9mx", pattern)  # infra ID of a live install
+        assert not fnmatch.fnmatchcase("0171d46a-scopedaws-2-fz9mx", pattern)  # sibling 0171d46a-scopedaws-2
+
 
 class TestCredentialsRequestCoverage:
     def test_fixture_components_match(self):
@@ -119,6 +124,10 @@ class TestSpokeInvariants:
                     cond = json.dumps(st["Condition"])
                     assert any(k in cond for k in ("CreateAction", "ResourceTag", "InstanceProfile")), f"{label}/{st['Sid']}"
 
+    def test_iam_reads_limited_to_operator_users(self):
+        (st,) = _statements(pol.component_policy("cco-iam-ro", NAME, REGION, DOMAIN))
+        assert st["Resource"] == [f"arn:aws:iam::*:user/{NAME}-{c.key}" for c in pol.COMPONENTS]
+
     def test_s3_limited_to_cluster_buckets(self):
         st = _statements(pol.component_policy("image-registry", NAME, REGION, DOMAIN))[0]
         assert st["Resource"] == [f"arn:aws:s3:::{PREFIX}-*", f"arn:aws:s3:::{PREFIX}-*/*"]
@@ -172,11 +181,17 @@ class TestInstallerPolicy:
         assert not granted & forbidden
 
     def test_iam_writes_limited_to_cluster(self):
+        allowed = (pol.node_role_arns(NAME), f"arn:aws:iam::*:instance-profile/{PREFIX}-?????-*")
         for st in _statements(pol.installer_policy(NAME)):
             writes = [a for a in _as_list(st["Action"])
                       if a.startswith("iam:") and not a.split(":")[1].startswith(("Get", "List", "Simulate"))]
             if writes:
-                assert st["Resource"] in (f"arn:aws:iam::*:role/{NAME}-*", f"arn:aws:iam::*:instance-profile/{PREFIX}-*"), st["Sid"]
+                assert st["Resource"] in allowed, st["Sid"]
+
+    def test_role_access_limited_to_node_roles(self):
+        by_sid = {st["Sid"]: st for st in _statements(pol.installer_policy(NAME))}
+        assert by_sid["ClusterRoles"]["Resource"] == by_sid["PassClusterRoles"]["Resource"] == [
+            f"arn:aws:iam::*:role/{NAME}-master-role", f"arn:aws:iam::*:role/{NAME}-worker-role"]
 
 
 class TestComponents:
