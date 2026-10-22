@@ -78,6 +78,19 @@ def infra_prefix(cluster_name: str) -> str:
     return base[:_INFRA_BASE_MAX].rstrip("-")
 
 
+def infra_id_pattern(cluster_name: str) -> str:
+    """IAM pattern matching exactly the installer infra ID (<prefix>-<5 random>; '?' is one character).
+
+    A trailing '<prefix>-*' would also match a cluster whose name extends this one ('acme-2' for 'acme').
+    """
+    return f"{infra_prefix(cluster_name)}-?????"
+
+
+def node_role_arns(cluster_name: str) -> list[str]:
+    """The cluster's BYO node roles (install-config iamRole)."""
+    return [f"arn:aws:iam::*:role/{cluster_name}-{role}-role" for role in ("master", "worker")]
+
+
 def render(doc: dict[str, Any]) -> str:
     """Compact JSON; IAM managed-policy size limits count characters."""
     return json.dumps(doc, separators=(",", ":"))
@@ -119,7 +132,7 @@ class _Scope:
         self.prefix = infra_prefix(name)
         self.region = region
         self.base_domain = base_domain
-        self.roles = [f"arn:aws:iam::*:role/{name}-master-role", f"arn:aws:iam::*:role/{name}-worker-role"]
+        self.roles = node_role_arns(name)
         self.own_profile = {"ArnLike": {"ec2:InstanceProfile": f"arn:aws:iam::*:instance-profile/{self.prefix}-*"}}
         self.ec2_owned = {"StringEquals": {f"ec2:ResourceTag/{TAG_KEY}": name}}
         # aws:ResourceTag: supported by both classic ELB and ELBv2 actions
@@ -181,8 +194,9 @@ def _machine_api(s: _Scope) -> dict:
 
 
 def _cco_iam_ro(s: _Scope) -> dict:
-    return _doc(_stmt("ReadClusterUsers", ["iam:GetUser", "iam:GetUserPolicy", "iam:ListAccessKeys"],
-                      f"arn:aws:iam::*:user/{s.name}-*"))
+    # Exact operator users: '<name>-*' would also match other clusters' users and the hub-only installer
+    users = [f"arn:aws:iam::*:user/{s.name}-{c.key}" for c in COMPONENTS]
+    return _doc(_stmt("ReadClusterUsers", ["iam:GetUser", "iam:GetUserPolicy", "iam:ListAccessKeys"], users))
 
 
 def _image_registry(s: _Scope) -> dict:
@@ -318,19 +332,18 @@ def installer_policy(name: str) -> dict:
     Network/compute stay broad (the installer creates the VPC); IAM is limited to the cluster's
     BYO roles and the instance profiles the installer wraps around them.
     """
-    prefix = infra_prefix(name)
+    roles = node_role_arns(name)
     return _doc(
         _stmt("Infrastructure", ["ec2:*", "elasticloadbalancing:*", "route53:*", "s3:*", "tag:*", "servicequotas:*"]),
         _stmt("IAMRead", ["iam:GetUser", "iam:ListRoles", "iam:ListUsers", "iam:ListInstanceProfiles",
                           "iam:ListInstanceProfilesForRole", "iam:ListRoleTags", "iam:ListUserTags",
                           "iam:SimulatePrincipalPolicy"]),
         _stmt("ClusterRoles", ["iam:GetRole", "iam:GetRolePolicy", "iam:ListRolePolicies", "iam:ListAttachedRolePolicies",
-                               "iam:TagRole", "iam:UntagRole"], f"arn:aws:iam::*:role/{name}-*"),
-        _stmt("PassClusterRoles", ["iam:PassRole"], f"arn:aws:iam::*:role/{name}-*",
-              {"StringEquals": {"iam:PassedToService": "ec2.amazonaws.com"}}),
+                               "iam:TagRole", "iam:UntagRole"], roles),
+        _stmt("PassClusterRoles", ["iam:PassRole"], roles, {"StringEquals": {"iam:PassedToService": "ec2.amazonaws.com"}}),
         _stmt("ClusterInstanceProfiles", [
             "iam:CreateInstanceProfile", "iam:DeleteInstanceProfile", "iam:GetInstanceProfile",
             "iam:AddRoleToInstanceProfile", "iam:RemoveRoleFromInstanceProfile",
             "iam:TagInstanceProfile", "iam:UntagInstanceProfile",
-        ], f"arn:aws:iam::*:instance-profile/{prefix}-*"),
+        ], f"arn:aws:iam::*:instance-profile/{infra_id_pattern(name)}-*"),
     )
