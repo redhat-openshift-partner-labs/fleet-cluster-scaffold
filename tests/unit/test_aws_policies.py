@@ -131,7 +131,11 @@ class TestSpokeInvariants:
 
     def test_s3_limited_to_cluster_buckets(self):
         st = _statements(pol.component_policy("image-registry", NAME, REGION, DOMAIN))[0]
-        assert st["Resource"] == [f"arn:aws:s3:::{PREFIX}-*", f"arn:aws:s3:::{PREFIX}-*/*"]
+        bucket = f"arn:aws:s3:::{PREFIX}-?????-image-registry-*"
+        assert st["Resource"] == [bucket, f"{bucket}/*"]
+        # bucket name from a live 4.21 install
+        assert fnmatch.fnmatchcase("arn:aws:s3:::0171d46a-scopedaws-fz9mx-image-registry-us-east-2-jvualcppxoun",
+                                   bucket.replace(PREFIX, pol.infra_prefix("0171d46a-scopedaws")))
 
     def test_route53_limited_to_cluster_apps_records(self):
         doc = pol.component_policy("ingress", NAME, REGION, DOMAIN)
