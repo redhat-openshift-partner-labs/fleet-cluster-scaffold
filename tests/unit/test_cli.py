@@ -546,6 +546,22 @@ def test_install_attempts_limit_rejects_zero(tmp_path):
     assert not (tmp_path / "ia0").exists()
 
 
+# ======== Worker replicas vs topology ========
+
+
+@pytest.mark.parametrize("topology", ["compact", "sno"])
+def test_worker_replicas_rejected_without_worker_pool(tmp_path, topology):
+    assert main(_aws_args(tmp_path, "wr1", "--topology", topology, "--worker-replicas", "2")) == 1
+    assert not (tmp_path / "wr1").exists()
+
+
+@pytest.mark.parametrize("topology,extra", [("compact", []), ("sno", ["--worker-replicas", "0"]),
+                                            ("standard", ["--worker-replicas", "2"])])
+def test_worker_replicas_accepted(tmp_path, topology, extra):
+    (tmp_path / "cluster-templates" / "aws" / topology).mkdir(parents=True, exist_ok=True)
+    assert main(_aws_args(tmp_path, "wr2", "--topology", topology, *extra)) == 0
+
+
 # ======== Unpatched base-template detection ========
 
 REPO_TEMPLATES = os.path.join(os.path.dirname(__file__), "..", "..", "cluster-templates")
