@@ -125,6 +125,25 @@ class TestSpokeInvariants:
                     cond = json.dumps(st["Condition"])
                     assert any(k in cond for k in ("CreateAction", "ResourceTag", "InstanceProfile")), f"{label}/{st['Sid']}"
 
+    def test_fits_policy_size_limit_at_max_name_length(self):
+        """The cluster name repeats in tag conditions, so the longest allowed name is the worst case."""
+        name = "a" * (pol.IAM_NAME_MAX - pol.MAX_NAME_SUFFIX)
+        for c in pol.COMPONENTS:
+            assert len(pol.render(pol.component_policy(c.key, name, "ap-southeast-1", DOMAIN))) <= pol.MANAGED_POLICY_MAX, c.key
+        assert len(pol.render(pol.master_role_policy(name, "ap-southeast-1", DOMAIN))) <= pol.INLINE_ROLE_POLICY_MAX
+
+    def test_snapshots_always_conditioned(self):
+        """An unconditioned snapshot grant lets a spoke restore another cluster's PV snapshots."""
+        for label, doc in _spoke_policies().items():
+            for st in _statements(doc):
+                if pol._ec2("snapshot") in _as_list(st["Resource"]):
+                    assert st.get("Condition"), f"{label}/{st['Sid']}"
+
+    def test_launch_only_from_foreign_snapshots(self):
+        doc = pol.component_policy("machine-api", NAME, REGION, DOMAIN)
+        (st,) = [s for s in _statements(doc) if "ec2:RunInstances" in s["Action"] and pol._ec2("snapshot") in _as_list(s["Resource"])]
+        assert st["Condition"] == {"StringNotEquals": {"ec2:Owner": "${aws:PrincipalAccount}"}, "Null": {"ec2:Owner": "false"}}
+
     def test_iam_reads_limited_to_operator_users(self):
         (st,) = _statements(pol.component_policy("cco-iam-ro", NAME, REGION, DOMAIN))
         assert st["Resource"] == [f"arn:aws:iam::*:user/{NAME}-{c.key}" for c in pol.COMPONENTS]

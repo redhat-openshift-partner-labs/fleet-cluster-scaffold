@@ -175,9 +175,15 @@ def _machine_api(s: _Scope) -> dict:
         # ...into the cluster's own subnets and security groups
         *_owned("RunInOwnedNetwork", ["ec2:RunInstances"], [_ec2("subnet"), _ec2("security-group")], s.ec2_owned_any),
         _stmt("RunSupporting", ["ec2:RunInstances"], [
-            _ec2("image"), _ec2("volume"), _ec2("network-interface"), _ec2("key-pair"), _ec2("snapshot"),
+            _ec2("image"), _ec2("volume"), _ec2("network-interface"), _ec2("key-pair"),
             _ec2("launch-template"), _ec2("placement-group"),
         ]),
+        # AMI backing snapshots belong to the AMI owner (RHCOS: Red Hat's account). This account's snapshots
+        # are other clusters' PV data. Null fails closed: StringNotEquals alone is true when ec2:Owner is absent.
+        _stmt("RunFromForeignSnapshot", ["ec2:RunInstances"], _ec2("snapshot"), {
+            "StringNotEquals": {"ec2:Owner": "${aws:PrincipalAccount}"},
+            "Null": {"ec2:Owner": "false"},
+        }),
         _stmt("TerminateOwned", ["ec2:TerminateInstances"], _ec2("instance"), s.own_profile),
         _stmt("TagOnLaunch", ["ec2:CreateTags"], [_ec2("instance"), _ec2("volume"), _ec2("network-interface")],
               s.ec2_create_action("RunInstances")),
