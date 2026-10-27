@@ -33,6 +33,7 @@ class ClusterParams:
     image_set: str = "img4.21.13-x86-64-appsub"
     zones: list[str] | None = None
     htpasswd_provider_name: str | None = None
+    ai_accelerator: str | None = None
     # Hive install attempts before giving up; unset in Hive means retry indefinitely
     install_attempts_limit: int = 1
     # Cloud-specific settings (e.g. Azure subscription ID), keyed by option name

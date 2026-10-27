@@ -398,13 +398,15 @@ class TestGenerateMetadata:
         result = yaml.safe_load(generate_metadata(params))
         assert result == {"platform": "aws", "aws-credentials-mode": "scoped"}
 
-    def test_includes_htpasswd_when_set(self):
+    def test_includes_optional_fields_when_set(self):
         params = ClusterParams(
-            name="m", region="us-east-1", tier="base",
+            name="m", region="us-east-1", tier="ai",
             htpasswd_provider_name="Acme Corp",
+            ai_accelerator="none",
         )
         result = yaml.safe_load(generate_metadata(params))
         assert result["htpasswd-provider-name"] == "Acme Corp"
+        assert result["ai-accelerator"] == "none"
 
 
 class TestWriteClusterDirMetadata:
@@ -426,7 +428,6 @@ class TestWriteClusterDirMetadata:
             (tmp_path / "meta-test" / "metadata.yaml").read_text()
         )
         assert meta["htpasswd-provider-name"] == "TestCo"
-
 
 # ===================== ClusterParams tests =====================
 

@@ -234,6 +234,8 @@ def generate_metadata(params: ClusterParams) -> str:
     meta = get_provider(params.cloud).metadata(params)
     if params.htpasswd_provider_name:
         meta["htpasswd-provider-name"] = params.htpasswd_provider_name
+    if params.ai_accelerator:
+        meta["ai-accelerator"] = params.ai_accelerator
     return dump(meta)
 
 

@@ -72,6 +72,12 @@ def _common_parser() -> argparse.ArgumentParser:
         default=None,
         help="Display name for the htpasswd identity provider (should be the company name)",
     )
+    common.add_argument(
+        "--ai-accelerator",
+        default=None,
+        choices=["none"],
+        help="AI accelerator type; only valid with --tier ai",
+    )
     common.add_argument("--base-path", default=".", help="Parent directory for cluster overlays (default: %(default)s)")
     common.add_argument(
         "--cluster-templates-dir",
@@ -138,9 +144,12 @@ def main(args=None) -> int:  # pylint: disable=too-many-return-statements
             image_set=parsed.image_set,
             zones=parsed.zones.split(",") if parsed.zones else None,
             htpasswd_provider_name=parsed.htpasswd_provider_name,
+            ai_accelerator=parsed.ai_accelerator,
             install_attempts_limit=parsed.install_attempts_limit,
             provider_options=provider.options_from_args(parsed),
         )
+        if params.ai_accelerator and params.tier != "ai":
+            raise ValueError("--ai-accelerator requires --tier ai.")
         # compact/sno bases have no worker MachinePool, so Hive could not manage installer-created workers
         if params.worker_replicas and not params.has_worker_pool:
             raise ValueError(

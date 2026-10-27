@@ -75,6 +75,7 @@ This creates `./my-cluster/` with the full Kustomize overlay structure and valid
 | `--zones`                  | cloud-specific               | Comma-separated zone list                                    |
 | `--install-attempts-limit` | `1`                          | Hive install attempts before the ClusterDeployment fails; failed installs need a human retrigger |
 | `--htpasswd-provider-name` | *(none)*                     | Display name for the htpasswd identity provider              |
+| `--ai-accelerator`         | *(none)*                     | `none` for CPU-only OpenShift AI; requires `--tier ai`       |
 | `--base-path`              | `.`                          | Parent directory for the cluster overlay                     |
 | `--cluster-templates-dir`  | `cluster-templates`          | Path to shared cluster templates directory                   |
 | `--force`                  |                              | Overwrite an existing cluster directory                      |
