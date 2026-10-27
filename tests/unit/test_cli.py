@@ -409,7 +409,18 @@ def test_topology_selects_template_and_replicas(tmp_path):
     ic = yaml.safe_load((hive / "patches" / "install-config.yaml").read_text())
     embedded = yaml.safe_load(ic["stringData"]["install-config.yaml"])
     assert embedded["controlPlane"]["replicas"] == 1
-    assert embedded["compute"][0] == {"name": "worker", "replicas": 0}
+    assert embedded["compute"][0] == {
+        "name": "worker",
+        "replicas": 0,
+        "platform": {
+            "aws": {
+                "iamRole": "sno1-worker-role",
+                "rootVolume": {"iops": 4000, "size": 100, "type": "gp3"},
+                "type": "m7i.2xlarge",
+                "zones": ["us-east-1a", "us-east-1b", "us-east-1c"],
+            }
+        },
+    }
 
 
 # ======== AWS credential mode tests ========
