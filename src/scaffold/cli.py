@@ -75,7 +75,7 @@ def _common_parser() -> argparse.ArgumentParser:
     common.add_argument(
         "--ai-accelerator",
         default=None,
-        choices=["none"],
+        choices=["none", "nvidia-gpu"],
         help="AI accelerator type; only valid with --tier ai",
     )
     common.add_argument("--base-path", default=".", help="Parent directory for cluster overlays (default: %(default)s)")
