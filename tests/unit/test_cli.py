@@ -130,18 +130,20 @@ def test_scaffold_with_custom_zones(mock_run, mock_which, tmp_path):
     assert (tmp_path / "zoned" / "kustomization.yaml").exists()
 
 
-def test_scaffold_writes_cpu_only_ai_accelerator(default_args):
+@pytest.mark.parametrize("accelerator", ["none", "nvidia-gpu"])
+def test_scaffold_writes_ai_accelerator(default_args, accelerator):
     args = default_args.copy()
     args[args.index("--tier") + 1] = "ai"
-    args += ["--ai-accelerator", "none", "--skip-validation"]
+    args += ["--ai-accelerator", accelerator, "--skip-validation"]
     assert main(args) == 0
     base_path = Path(args[args.index("--base-path") + 1])
     metadata = yaml.safe_load((base_path / "my-cluster" / "metadata.yaml").read_text())
-    assert metadata["ai-accelerator"] == "none"
+    assert metadata["ai-accelerator"] == accelerator
 
 
-def test_rejects_ai_accelerator_without_ai_tier(default_args):
-    args = [*default_args, "--ai-accelerator", "none"]
+@pytest.mark.parametrize("accelerator", ["none", "nvidia-gpu"])
+def test_rejects_ai_accelerator_without_ai_tier(default_args, accelerator):
+    args = [*default_args, "--ai-accelerator", accelerator]
     assert main(args) == 1
     base_path = Path(args[args.index("--base-path") + 1])
     assert not (base_path / "my-cluster").exists()
