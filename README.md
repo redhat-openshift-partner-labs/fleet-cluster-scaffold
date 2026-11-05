@@ -1,8 +1,24 @@
 # fleet-cluster-scaffold
 
+[![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)](#requirements)
+[![Kustomize](https://img.shields.io/badge/Kustomize-required-326CE5?logo=kubernetes&logoColor=white)](#requirements)
+[![AWS](https://img.shields.io/badge/AWS-supported-232F3E?logo=amazonwebservices&logoColor=white)](#aws)
+[![Azure](https://img.shields.io/badge/Azure-not%20ready-0078D4?logo=microsoftazure&logoColor=white)](#azure-status)
+
 Standalone CLI tool for scaffolding OpenShift cluster overlay directories with Kustomize. Generates all the Hive and Crossplane resources needed to provision a cluster on AWS or Azure, without depending on the fleet monorepo.
 
-## What it does
+## Contents
+
+- [Overview](#overview)
+- [Getting started](#getting-started)
+- [Command reference](#command-reference)
+- [Provider guides](#provider-guides)
+- [Generated output](#generated-output)
+- [Templates and extension](#templates-and-extension)
+- [Validation](#validation)
+- [Development](#development)
+
+## Overview
 
 Given a cloud, cluster name, region, and tier, `fleet-scaffold-cluster` generates a complete Kustomize overlay directory containing:
 
@@ -16,33 +32,29 @@ Each overlay references shared base resources in `cluster-templates/<cloud>/<top
 
 Every generated resource carries the label `openshiftpartnerlabs.com/cluster=<name>`. The Crossplane managed resources are cluster-scoped, so deleting the cluster namespace does not remove them. Teardown should select them by this label (for example `oc get managed -l openshiftpartnerlabs.com/cluster=<name>`) instead of a hard-coded name list.
 
-## Requirements
+### Provider status
+
+| Cloud      | Status       | Notes |
+|------------|--------------|-------|
+| `aws`      | Supported    | Cluster-scoped IAM workflow |
+| `azure`    | Not ready    | Overlay generation only; see [Azure status](#azure-status) |
+| `gcp`      | Planned      | Command exits `1` |
+| `ibmcloud` | Planned      | Command exits `1` |
+
+## Getting started
+
+### Requirements
 
 - Python 3.11+
 - [kustomize](https://kubectl.docs.kubernetes.io/installation/kustomize/) (for post-scaffold validation; skip with `--skip-validation`)
 
-## Installation
+### Installation
 
 ```bash
 pip install .
 ```
 
 This installs the `fleet-scaffold-cluster` command.
-
-## Usage
-
-```
-fleet-scaffold-cluster CLOUD --name NAME --region REGION --tier TIER [options]
-```
-
-| Cloud      | Status              |
-|------------|---------------------|
-| `aws`      | Supported           |
-| `azure`    | Not ready (see [Azure status](#azure-status)) |
-| `gcp`      | Planned (exits 1)   |
-| `ibmcloud` | Planned (exits 1)   |
-
-Run `fleet-scaffold-cluster CLOUD --help` for the full flag list of a cloud.
 
 ### Quick start
 
@@ -56,6 +68,16 @@ fleet-scaffold-cluster azure --name my-cluster --region eastus2 --tier base \
 ```
 
 This creates `./my-cluster/` with the full Kustomize overlay structure and validates it with `kustomize build`. Validation also fails if any base-template name (`cluster-placeholder*`, `subscription-placeholder`) survives the build. That means a patch matched nothing, usually because `--cluster-templates-dir` points at stale templates; kustomize itself does not report this. The pipeline-bound placeholders (`INFRA_ID_PLACEHOLDER`, `VPC_ID_PLACEHOLDER`, `principal-id-placeholder`) are expected.
+
+## Command reference
+
+### Command syntax
+
+```
+fleet-scaffold-cluster CLOUD --name NAME --region REGION --tier TIER [options]
+```
+
+Run `fleet-scaffold-cluster CLOUD --help` for the full flag list of a cloud.
 
 ### Common arguments (all clouds)
 
@@ -80,6 +102,8 @@ This creates `./my-cluster/` with the full Kustomize overlay structure and valid
 | `--cluster-templates-dir`  | `cluster-templates`          | Path to shared cluster templates directory                   |
 | `--force`                  |                              | Overwrite an existing cluster directory                      |
 | `--skip-validation`        |                              | Skip `kustomize build` validation after scaffolding          |
+
+## Provider guides
 
 ### AWS
 
@@ -251,7 +275,7 @@ If the overlays are synced by a GitOps tool, exclude `spec.forProvider.principal
 - A public Azure DNS zone for `--base-domain` in `--base-domain-resource-group`
 - Regional vCPU quota for the chosen VM family
 
-## Generated directory structure
+## Generated output
 
 ```
 <cluster-name>/
@@ -276,7 +300,9 @@ If the overlays are synced by a GitOps tool, exclude `spec.forProvider.principal
                                  #        client-secret, role-assignment-*
 ```
 
-## Cluster templates
+## Templates and extension
+
+### Cluster templates
 
 The `cluster-templates/` directory contains shared base resources organized by cloud provider and topology:
 
@@ -287,7 +313,7 @@ cluster-templates/
   gcp/      {standard,compact,sno}   # templates only; no generator yet
 ```
 
-## Adding a cloud provider
+### Adding a cloud provider
 
 1. Add `cluster-templates/<cloud>/{standard,compact,sno}/{hive,crossplane}`.
 2. Implement a `Provider` subclass in `src/scaffold/providers/<cloud>.py` (see `aws.py` and `azure.py`).
