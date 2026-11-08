@@ -1,22 +1,21 @@
 """Security invariants and CredentialsRequest coverage for the scoped AWS policies."""
 
+import dataclasses
 import fnmatch
 import json
 import pathlib
 
 import pytest
-import yaml
 
 from scaffold.providers import aws_policies as pol
+from scaffold.release import CredentialsRequest, load_credentials_requests
 
 NAME, REGION, DOMAIN = "10f25620-vscopeocpv", "us-east-2", "openshiftpartnerlabs.com"
 PREFIX = pol.infra_prefix(NAME)
 FIXTURES = pathlib.Path(__file__).parent.parent / "fixtures" / "credentialsrequests" / "aws-4.21"
+REQUESTS = load_credentials_requests(FIXTURES)
+BY_NAME = {r.name: r for r in REQUESTS}
 
-# Actions deliberately not granted, with the reason
-INTENTIONALLY_DROPPED = {
-    "openshift-ingress": {"sts:AssumeRole"},  # only for shared-VPC hostedZoneRole, which fleet doesn't use
-}
 # Mutating action verbs that must never be allowed account-wide on the spoke
 MUTATING = ("Terminate", "Delete", "Detach", "Attach", "Modify", "Revoke", "Authorize", "Deregister",
             "Register", "Set", "Put", "Create", "Run", "Assign", "Unassign", "Change", "Pass", "Enable",
@@ -24,13 +23,8 @@ MUTATING = ("Terminate", "Delete", "Detach", "Attach", "Modify", "Revoke", "Auth
             "ReEncrypt", "Abort")
 
 
-def _credentials_requests() -> dict[str, list[str]]:
-    out = {}
-    for f in sorted(FIXTURES.glob("*.yaml")):
-        for d in yaml.safe_load_all(f.read_text()):
-            if d:
-                out[d["metadata"]["name"]] = [a for st in d["spec"]["providerSpec"]["statementEntries"] for a in st["action"]]
-    return out
+def _gaps(requests) -> list[str]:
+    return pol.coverage_gaps(requests, NAME, REGION, DOMAIN)
 
 
 def _statements(doc: dict) -> list[dict]:
@@ -70,16 +64,81 @@ class TestInfraPrefix:
 
 
 class TestCredentialsRequestCoverage:
-    def test_fixture_components_match(self):
-        assert set(_credentials_requests()) == {c.credentials_request for c in pol.COMPONENTS}
+    def test_fixtures_have_no_gaps(self):
+        assert _gaps(REQUESTS) == []
 
     @pytest.mark.parametrize("component", pol.COMPONENTS, ids=lambda c: c.key)
     def test_every_required_action_is_granted(self, component):
-        required = set(_credentials_requests()[component.credentials_request])
-        required -= INTENTIONALLY_DROPPED.get(component.credentials_request, set())
+        """Same check as coverage_gaps, one test per operator so a failure names it."""
+        required = set(BY_NAME[component.credentials_request].actions)
+        required -= pol.INTENTIONALLY_DROPPED.get(component.credentials_request, frozenset())
         granted = _allowed_actions(pol.component_policy(component.key, NAME, REGION, DOMAIN))
         missing = {a for a in required if not any(fnmatch.fnmatchcase(a, g) for g in granted)}
         assert not missing, f"{component.key} lacks {sorted(missing)}"
+
+
+class TestCoverageGaps:
+    """coverage_gaps reports every drift between a release's CredentialsRequests and the scoped policies."""
+
+    MACHINE_API = "openshift-machine-api-aws"
+
+    @staticmethod
+    def _with(name: str, **changes) -> list[CredentialsRequest]:
+        return [dataclasses.replace(r, **changes) if r.name == name else r for r in REQUESTS]
+
+    def test_unknown_request_is_reported(self):
+        extra = dataclasses.replace(BY_NAME[self.MACHINE_API], name="openshift-cluster-api-aws")
+        assert _gaps([*REQUESTS, extra]) == [
+            "no scoped policy for CredentialsRequest 'openshift-cluster-api-aws' "
+            "(-> openshift-machine-api/aws-cloud-credentials); "
+            "the cluster would install with that operator lacking credentials"]
+
+    def test_request_absent_from_release_is_reported(self):
+        assert _gaps([r for r in REQUESTS if r.name != "openshift-ingress"]) == [
+            "ingress: CredentialsRequest 'openshift-ingress' is not in this release; its IAM user and policy would be unused"]
+
+    def test_moved_secret_target_is_reported(self):
+        assert _gaps(self._with("openshift-ingress", namespace="openshift-ingress")) == [
+            "ingress: CredentialsRequest 'openshift-ingress' targets openshift-ingress/cloud-credentials, "
+            "the scaffold delivers openshift-ingress-operator/cloud-credentials"]
+
+    def test_missing_actions_are_reported_sorted(self):
+        """OCP 4.22 adds these two to machine-api; the scoped policy does not grant them."""
+        actions = (*BY_NAME[self.MACHINE_API].actions, "ec2:ReleaseHosts", "ec2:AllocateHosts")
+        assert _gaps(self._with(self.MACHINE_API, actions=actions)) == ["machine-api lacks ec2:AllocateHosts, ec2:ReleaseHosts"]
+
+    def test_wildcard_grant_covers_action(self):
+        actions = (*BY_NAME["aws-ebs-csi-driver-operator"].actions, "kms:ReEncryptFrom")  # granted as kms:ReEncrypt*
+        assert _gaps(self._with("aws-ebs-csi-driver-operator", actions=actions)) == []
+
+    def test_intentionally_dropped_action_is_not_a_gap(self):
+        assert "sts:AssumeRole" in BY_NAME["openshift-ingress"].actions
+        assert "sts:AssumeRole" in pol.INTENTIONALLY_DROPPED["openshift-ingress"]
+        assert _gaps(REQUESTS) == []
+
+    def test_other_providers_are_ignored(self):
+        azure = CredentialsRequest("openshift-ingress-azure", "AzureProviderSpec", "openshift-ingress-operator",
+                                   "cloud-credentials", ("Microsoft.Network/dnsZones/A/write",))
+        assert _gaps([*REQUESTS, azure]) == []
+
+    def test_gaps_follow_the_documented_order(self):
+        """Unknown, absent, moved, lacking: grouped by kind, whatever the component order."""
+        requests = []
+        for r in REQUESTS:
+            if r.name == self.MACHINE_API:  # first component: moved target
+                r = dataclasses.replace(r, secret="aws-creds")
+            elif r.name == "cloud-credential-operator-iam-ro":  # second component: absent
+                continue
+            elif r.name == "openshift-image-registry":  # third component: extra action
+                r = dataclasses.replace(r, actions=(*r.actions, "s3:PutBucketPolicy"))
+            requests.append(r)
+        requests.append(dataclasses.replace(BY_NAME["openshift-ingress"], name="openshift-cluster-api-aws"))
+        gaps = _gaps(requests)
+        assert len(gaps) == 4
+        assert gaps[0].startswith("no scoped policy for CredentialsRequest 'openshift-cluster-api-aws'")
+        assert gaps[1].startswith("cco-iam-ro: CredentialsRequest 'cloud-credential-operator-iam-ro' is not in this release")
+        assert gaps[2].startswith("machine-api: CredentialsRequest 'openshift-machine-api-aws' targets")
+        assert gaps[3] == "image-registry lacks s3:PutBucketPolicy"
 
 
 class TestSpokeInvariants:
@@ -221,15 +280,6 @@ class TestInstallerPolicy:
 class TestComponents:
     def test_iam_name_budget(self):
         assert pol.MAX_NAME_SUFFIX == len("-image-registry")
-
-    def test_secret_targets_match_credentials_requests(self):
-        targets = {}
-        for f in sorted(FIXTURES.glob("*.yaml")):
-            for d in yaml.safe_load_all(f.read_text()):
-                if d:
-                    targets[d["metadata"]["name"]] = (d["spec"]["secretRef"]["namespace"], d["spec"]["secretRef"]["name"])
-        for c in pol.COMPONENTS:
-            assert targets[c.credentials_request] == (c.namespace, c.secret), c.key
 
 
 class TestCrossClusterIsolation:
