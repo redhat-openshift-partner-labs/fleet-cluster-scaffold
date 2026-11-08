@@ -689,9 +689,11 @@ def test_release_check_runs_against_the_image_set_release(tmp_path, caplog, rele
     caplog.set_level(logging.INFO, logger="scaffold")
     assert main(_aws_args(tmp_path, "rc1")) == 0
     # Announced before the extraction: oc prints nothing while it pulls
-    assert (f"  -> release check: extracting CredentialsRequests from {RELEASE_IMAGE} "
-            "(oc adm release extract, up to 300s)") in caplog.text
-    assert f"Release check: 6 CredentialsRequests from {RELEASE_IMAGE} covered by the scoped policies." in caplog.text
+    assert (f"  -> release check:\n  -> -> extracting CredentialsRequests from {RELEASE_IMAGE}\n"
+            "  -> -> (oc adm release extract, up to 300s)") in caplog.text
+    assert (f"  -> -> Release check: 6 CredentialsRequests from {RELEASE_IMAGE} "
+            "covered by the scoped policies.") in caplog.text
+    assert "  -> -> Cluster 'rc1' scaffolded successfully" in caplog.text
     (call,) = release_from_fixtures.call_args_list
     image, install_config, cloud, _workdir = call.args
     assert (image, cloud) == (RELEASE_IMAGE, "aws")
@@ -724,7 +726,7 @@ def test_skip_release_check(tmp_path, caplog, release_from_fixtures):
 def test_credentials_requests_dir_replaces_extraction(tmp_path, caplog, release_from_fixtures):
     caplog.set_level(logging.INFO, logger="scaffold")
     assert main(_aws_args(tmp_path, "rc5", "--credentials-requests-dir", str(FIXTURES))) == 0
-    assert f"Release check: 6 CredentialsRequests from {FIXTURES} covered by the scoped policies." in caplog.text
+    assert f"  -> -> Release check: 6 CredentialsRequests from {FIXTURES} covered by the scoped policies." in caplog.text
     release_from_fixtures.assert_not_called()
 
 
