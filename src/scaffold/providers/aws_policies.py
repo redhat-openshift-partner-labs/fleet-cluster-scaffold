@@ -20,18 +20,22 @@ always apply at create time (so partner LoadBalancer Services need no annotation
 egress-IP ENI changes to the cluster VPC.
 
 Operator actions mirror the OCP 4.20/4.21 AWS CredentialsRequests
-(`oc adm release extract --credentials-requests --cloud=aws --included`). Re-diff on every OCP
+(`oc adm release extract --credentials-requests --cloud=aws --included`). coverage_gaps() reports
+every difference between a release's CredentialsRequests and these policies; run it on every OCP
 minor upgrade.
 """
 
 from __future__ import annotations
 
+import fnmatch
 import json
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
 from scaffold.providers.base import CLUSTER_LABEL
+from scaffold.release import CredentialsRequest
 
 # Same key as the hub ownership label, so one name identifies a cluster in AWS and on the hub
 TAG_KEY = CLUSTER_LABEL
@@ -278,6 +282,54 @@ _COMPONENT_POLICIES = {
 
 def component_policy(key: str, name: str, region: str, base_domain: str) -> dict:
     return _COMPONENT_POLICIES[key](_Scope(name, region, base_domain))
+
+
+# ===================== release coverage =====================
+
+# CredentialsRequest actions the scoped policies deliberately omit, by request name
+INTENTIONALLY_DROPPED: dict[str, frozenset[str]] = {
+    "openshift-ingress": frozenset({"sts:AssumeRole"}),  # shared-VPC hostedZoneRole only; fleet does not use it
+}
+
+AWS_PROVIDER_KIND = "AWSProviderSpec"
+
+
+def _granted_actions(doc: dict) -> set[str]:
+    return {a for st in doc["Statement"] if st["Effect"] == "Allow"
+            for a in (st["Action"] if isinstance(st["Action"], list) else [st["Action"]])}
+
+
+def coverage_gaps(requests: Iterable[CredentialsRequest], name: str, region: str, base_domain: str) -> list[str]:
+    """Differences between a release's AWS CredentialsRequests and the scoped policies; empty when covered.
+
+    One line per finding, grouped in this order: requests with no scoped policy, components whose
+    request is absent from the release, requests whose secret target moved, components lacking an
+    action (IAM wildcards in the granted actions match; INTENTIONALLY_DROPPED actions are skipped).
+    """
+    by_name = {r.name: r for r in requests if r.provider_kind == AWS_PROVIDER_KIND}
+    known = {c.credentials_request for c in COMPONENTS}
+    unknown = [f"no scoped policy for CredentialsRequest '{r.name}' (-> {r.namespace}/{r.secret}); "
+               "the cluster would install with that operator lacking credentials"
+               for r in by_name.values() if r.name not in known]
+    absent: list[str] = []
+    moved: list[str] = []
+    lacking: list[str] = []
+    for c in COMPONENTS:
+        r = by_name.get(c.credentials_request)
+        if r is None:
+            absent.append(f"{c.key}: CredentialsRequest '{c.credentials_request}' is not in this release; "
+                          "its IAM user and policy would be unused")
+            continue
+        if (r.namespace, r.secret) != (c.namespace, c.secret):
+            moved.append(f"{c.key}: CredentialsRequest '{r.name}' targets {r.namespace}/{r.secret}, "
+                         f"the scaffold delivers {c.namespace}/{c.secret}")
+        granted = _granted_actions(component_policy(c.key, name, region, base_domain))
+        dropped = INTENTIONALLY_DROPPED.get(r.name, frozenset())
+        missing = sorted(a for a in r.actions
+                         if a not in dropped and not any(fnmatch.fnmatchcase(a, g) for g in granted))
+        if missing:
+            lacking.append(f"{c.key} lacks {', '.join(missing)}")
+    return unknown + absent + moved + lacking
 
 
 # ===================== node role policies =====================
