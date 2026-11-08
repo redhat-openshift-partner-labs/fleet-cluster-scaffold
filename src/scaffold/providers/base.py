@@ -16,6 +16,12 @@ if TYPE_CHECKING:  # type-only: params imports providers at runtime
 # Ownership label on every overlay resource (selector for per-cluster teardown)
 CLUSTER_LABEL = "openshiftpartnerlabs.com/cluster"
 
+# Annotations on each operator AccessKey: the CredentialsRequest it serves and the spoke Secret
+# its key is delivered to. The installer AccessKey carries none, which tells the two apart.
+ANNOTATION_CREDENTIALS_REQUEST = "openshiftpartnerlabs.com/credentials-request"
+ANNOTATION_TARGET_NAMESPACE = "openshiftpartnerlabs.com/target-namespace"
+ANNOTATION_TARGET_SECRET = "openshiftpartnerlabs.com/target-secret"
+
 
 def dump(obj: Any) -> str:
     return yaml.dump(obj, default_flow_style=False, sort_keys=False)

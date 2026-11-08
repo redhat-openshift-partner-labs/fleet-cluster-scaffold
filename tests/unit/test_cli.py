@@ -9,6 +9,12 @@ import pytest
 import yaml
 
 from scaffold.cli import main
+from scaffold.providers import aws_policies as pol
+from scaffold.providers.base import (
+    ANNOTATION_CREDENTIALS_REQUEST,
+    ANNOTATION_TARGET_NAMESPACE,
+    ANNOTATION_TARGET_SECRET,
+)
 from scaffold.release import ReleaseError, load_credentials_requests
 
 FIXTURES = Path(__file__).parent.parent / "fixtures" / "credentialsrequests" / "aws-4.21"
@@ -646,6 +652,23 @@ def test_stale_base_is_rejected(tmp_path):
     rg = templates / "azure" / "standard" / "crossplane" / "resource-group.yaml"
     rg.write_text(rg.read_text().replace("name: cluster-placeholder-rg", "name: cluster-placeholder-old-rg"))
     assert main(_validate_args(tmp_path, "azure", "standard", templates)) == 1
+
+
+@needs_kustomize
+def test_scoped_access_keys_carry_target_annotations(tmp_path):
+    """The rendered overlay, not only the patch files: kustomize applies the add op onto the base AccessKeys."""
+    assert main(_validate_args(tmp_path, "aws", "standard", REPO_TEMPLATES)) == 0
+    built = subprocess.run(["kustomize", "build", str(tmp_path / "out" / "v-standard" / "crossplane")],
+                           capture_output=True, text=True, check=True)
+    access_keys = {d["metadata"]["name"]: d["metadata"].get("annotations", {})
+                   for d in yaml.safe_load_all(built.stdout) if d and d["kind"] == "AccessKey"}
+    for c in pol.COMPONENTS:
+        assert access_keys[f"v-standard-{c.key}-access-key"] == {
+            ANNOTATION_CREDENTIALS_REQUEST: c.credentials_request,
+            ANNOTATION_TARGET_NAMESPACE: c.namespace,
+            ANNOTATION_TARGET_SECRET: c.secret,
+        }
+    assert ANNOTATION_TARGET_SECRET not in access_keys["v-standard-access-key"]
 
 
 # ======== Release check (scoped AWS policies vs the release's CredentialsRequests) ========
