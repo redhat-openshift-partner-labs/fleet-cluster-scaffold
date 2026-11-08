@@ -2,7 +2,8 @@
 
 CLI: fleet-scaffold-cluster CLOUD --name NAME --region REGION --tier TIER [options]
 Generates <base-path>/<name>/ with all Kustomize patches pre-populated.
-Validates output with kustomize build. Exits 1 on validation failure.
+Validates output with kustomize build, then verifies the scoped AWS policies against the
+CredentialsRequests of the release behind --image-set. Exits 1 on either failure.
 """
 
 from __future__ import annotations
@@ -13,16 +14,20 @@ import os.path
 import shutil
 import subprocess
 import sys
+import tempfile
 
+from scaffold import release
 from scaffold.lib import (
     TOPOLOGY_REPLICAS,
     ClusterParams,
     find_unpatched,
+    render_install_config,
     validate_cluster_name,
     validate_profile,
     write_cluster_dir,
 )
 from scaffold.providers import PROVIDERS
+from scaffold.providers.base import Provider
 
 _LOG = logging.getLogger("scaffold")
 
@@ -90,6 +95,26 @@ def _common_parser() -> argparse.ArgumentParser:
     common.add_argument(
         "--skip-validation", action="store_true", default=False, help="Skip kustomize build validation after scaffolding."
     )
+    # Release check: scoped AWS policies vs the release's CredentialsRequests (see check_release)
+    common.add_argument(
+        "--release-image",
+        default=None,
+        metavar="PULLSPEC",
+        help="Release image whose CredentialsRequests the scoped policies are checked against "
+             "(default: derived from --image-set)",
+    )
+    common.add_argument(
+        "--credentials-requests-dir",
+        default=None,
+        metavar="DIR",
+        help="Check against CredentialsRequest manifests already extracted into DIR instead of pulling the release image",
+    )
+    common.add_argument(
+        "--skip-release-check",
+        action="store_true",
+        default=False,
+        help="Scaffold without verifying the scoped policies against the release (not for normal use)",
+    )
     return common
 
 
@@ -113,6 +138,68 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _validate_kustomize(cluster_dir: str, params: ClusterParams, cluster_templates_dir: str) -> int:
+    """kustomize build each sub-directory; 1 on a build error or when base-template names survive."""
+    if not check_kustomize():
+        return 1
+    for subdir in ["hive", "crossplane"]:
+        path = os.path.join(cluster_dir, subdir)
+        result = subprocess.run(
+            ["kustomize", "build", path],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            _LOG.error("kustomize build %s failed: %s", path, result.stderr)
+            return 1
+        leftover = find_unpatched(result.stdout)
+        if leftover:
+            _LOG.error(
+                "kustomize build %s left base-template names unpatched: %s. The overlay patches do not match "
+                "the base in %s (stale cluster-templates?).",
+                path, ", ".join(leftover), os.path.join(cluster_templates_dir, params.profile),
+            )
+            return 1
+        _LOG.info("  -> %s: OK", subdir)
+    return 0
+
+
+def check_release(provider: Provider, params: ClusterParams, parsed: argparse.Namespace) -> int:
+    """Verify the overlay's scoped policies against the release's CredentialsRequests; 1 on any gap or error.
+
+    The requests come from --credentials-requests-dir, or from `oc adm release extract` of
+    --release-image (default: the image derived from --image-set).
+    """
+    if parsed.skip_release_check:
+        _LOG.info("Skipping release check (--skip-release-check): the scoped policies were not verified against %s.",
+                  params.image_set)
+        return 0
+    if not provider.release_check_applies(params):
+        _LOG.info("Release check not applicable (no scoped policies for this configuration).")
+        return 0
+    try:
+        if parsed.credentials_requests_dir:
+            source = parsed.credentials_requests_dir
+            requests = release.load_credentials_requests(source)
+        else:
+            source = parsed.release_image or release.release_image_for(params.image_set)
+            with tempfile.TemporaryDirectory(prefix="fleet-scaffold-release-") as workdir:
+                requests = release.extract_credentials_requests(source, render_install_config(params), params.cloud, workdir)
+    except release.ReleaseError as exc:
+        _LOG.error("Release check failed: %s", exc)
+        return 1
+    gaps = provider.release_gaps(params, requests)
+    if gaps:
+        _LOG.error("Release check failed against %s:", source)
+        for gap in gaps:
+            _LOG.error("  %s", gap)
+        _LOG.error("Update aws_policies.py (and refresh tests/fixtures/credentialsrequests/), "
+                   "or pass --skip-release-check to scaffold without verification.")
+        return 1
+    _LOG.info("Release check: %d CredentialsRequests from %s covered by the scoped policies.", len(requests), source)
+    return 0
+
+
 def main(args=None) -> int:  # pylint: disable=too-many-return-statements
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     parser = build_parser()
@@ -124,6 +211,10 @@ def main(args=None) -> int:  # pylint: disable=too-many-return-statements
         return 1
     if extra:
         parser.error(f"unrecognized arguments: {' '.join(extra)}")
+    if parsed.skip_release_check and (parsed.release_image or parsed.credentials_requests_dir):
+        parser.error("--skip-release-check cannot be combined with --release-image or --credentials-requests-dir")
+    if parsed.release_image and parsed.credentials_requests_dir:
+        parser.error("--release-image and --credentials-requests-dir are mutually exclusive")
 
     try:
         validate_cluster_name(parsed.name)
@@ -175,31 +266,14 @@ def main(args=None) -> int:  # pylint: disable=too-many-return-statements
 
     if parsed.skip_validation:
         _LOG.info("Skipping kustomize validation (--skip-validation).")
-        return 0
+    else:
+        rc = _validate_kustomize(cluster_dir, params, parsed.cluster_templates_dir)
+        if rc:
+            return rc
 
-    if not check_kustomize():
-        return 1
-
-    # Validate each sub-dir
-    for subdir in ["hive", "crossplane"]:
-        path = os.path.join(cluster_dir, subdir)
-        result = subprocess.run(
-            ["kustomize", "build", path],
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode != 0:
-            _LOG.error("kustomize build %s failed: %s", path, result.stderr)
-            return 1
-        leftover = find_unpatched(result.stdout)
-        if leftover:
-            _LOG.error(
-                "kustomize build %s left base-template names unpatched: %s. The overlay patches do not match "
-                "the base in %s (stale cluster-templates?).",
-                path, ", ".join(leftover), os.path.join(parsed.cluster_templates_dir, params.profile),
-            )
-            return 1
-        _LOG.info("  -> %s: OK", subdir)
+    rc = check_release(provider, params, parsed)
+    if rc:
+        return rc
 
     _LOG.info("Cluster %r scaffolded successfully", params.name)
     return 0

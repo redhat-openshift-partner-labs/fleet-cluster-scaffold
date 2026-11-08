@@ -11,10 +11,12 @@ from __future__ import annotations
 
 import argparse
 import logging
+from collections.abc import Iterable
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:  # type-only: params imports providers at runtime
     from scaffold.params import ClusterParams
+    from scaffold.release import CredentialsRequest
 
 from scaffold.providers import aws_policies as pol
 from scaffold.providers.base import Provider, dump, rename_ops, replace, target
@@ -127,6 +129,12 @@ class AWSProvider(Provider):
 
     def metadata(self, params: ClusterParams) -> dict[str, str]:
         return {**super().metadata(params), "aws-credentials-mode": SCOPED if self.scoped(params) else LEGACY}
+
+    def release_check_applies(self, params: ClusterParams) -> bool:
+        return self.scoped(params)
+
+    def release_gaps(self, params: ClusterParams, requests: Iterable[CredentialsRequest]) -> list[str]:
+        return pol.coverage_gaps(requests, params.name, params.region, params.base_domain)
 
     def crossplane_patches(self, params: ClusterParams) -> tuple[list[dict], dict[str, str]]:
         if self.scoped(params):

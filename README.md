@@ -47,6 +47,7 @@ Every generated resource carries the label `openshiftpartnerlabs.com/cluster=<na
 
 - Python 3.11+
 - [kustomize](https://kubectl.docs.kubernetes.io/installation/kustomize/) (for post-scaffold validation; skip with `--skip-validation`)
+- [oc](https://mirror.openshift.com/pub/openshift-v4/clients/ocp/) and network access to `quay.io` (for the [release check](#release-check) of scoped AWS clusters; not needed with `--credentials-requests-dir` or `--skip-release-check`)
 
 ### Installation
 
@@ -68,6 +69,8 @@ fleet-scaffold-cluster azure --name my-cluster --region eastus2 --tier base \
 ```
 
 This creates `./my-cluster/` with the full Kustomize overlay structure and validates it with `kustomize build`. Validation also fails if any base-template name (`cluster-placeholder*`, `subscription-placeholder`) survives the build. That means a patch matched nothing, usually because `--cluster-templates-dir` points at stale templates; kustomize itself does not report this. The pipeline-bound placeholders (`INFRA_ID_PLACEHOLDER`, `VPC_ID_PLACEHOLDER`, `principal-id-placeholder`) are expected.
+
+For AWS clusters with scoped credentials (the default) the scaffold then verifies the operator policies against the CredentialsRequests of the release behind `--image-set`; this needs `oc`, access to `quay.io`, and about 20 seconds. See [Release check](#release-check).
 
 ## Command reference
 
@@ -102,6 +105,9 @@ Run `fleet-scaffold-cluster CLOUD --help` for the full flag list of a cloud.
 | `--cluster-templates-dir`  | `cluster-templates`          | Path to shared cluster templates directory                   |
 | `--force`                  |                              | Overwrite an existing cluster directory                      |
 | `--skip-validation`        |                              | Skip `kustomize build` validation after scaffolding          |
+| `--release-image`          | derived from `--image-set`   | Release image whose CredentialsRequests the scoped AWS policies are checked against ([release check](#release-check)) |
+| `--credentials-requests-dir` | *(none)*                   | Check against CredentialsRequest manifests already extracted into this directory instead of pulling the release image |
+| `--skip-release-check`     |                              | Scaffold without the release check; the scoped policies are then unverified for that release |
 
 ## Provider guides
 
@@ -194,9 +200,11 @@ This identity can create IAM policies and roles, which is account-admin-equivale
 - **Account-wide reads.** The stock CredentialsRequests need these on `*`, and EC2 `Describe*` calls cannot be scoped by resource. So every spoke can list every cluster's instances, volumes, snapshots, security groups, load balancers and hosted zones, plus every tagged resource in the account. The relevant actions: `ec2:Describe*`, `elasticloadbalancing:Describe*`, `route53:ListHostedZones`, `tag:GetResources`. Spokes can read this inventory but not change it.
 - **The snapshot check fails closed.** It requires the `ec2:Owner` key. If EC2 stops sending it, or install-config points at an AMI copied into this account, machine-api launches fail with `UnauthorizedOperation`.
 - Between install and step 3, partner `LoadBalancer` Services and egress IPs are denied. Partners don't have access yet in that window.
-- Custom operator policies are outside Red Hat's tested configuration. On every OCP minor upgrade:
-  1. re-diff the CredentialsRequests (`oc adm release extract --credentials-requests --cloud=aws --included`) against `tests/fixtures/credentialsrequests/` and update `aws_policies.py`;
-  2. set `cloudcredential.openshift.io/upgradeable-to` on the spoke.
+- Custom operator policies are outside Red Hat's tested configuration. The [release check](#release-check) gates every scaffold run, so a release that changes a CredentialsRequest fails the scaffold instead of installing a cluster whose operator lacks an action. On every OCP minor upgrade:
+  1. scaffold a cluster with the new `--image-set` and read the gap lines;
+  2. update `aws_policies.py` until the check passes;
+  3. refresh the fixtures: `oc adm release extract --credentials-requests --cloud=aws --included --install-config=<install-config.yaml> --to tests/fixtures/credentialsrequests/aws-<minor> <release image>`, where `<install-config.yaml>` is the text under `stringData` in `hive/patches/install-config.yaml` of a scaffolded overlay, then point `FIXTURES` in `tests/unit/test_aws_policies.py`, `tests/unit/test_release.py` and `tests/unit/test_cli.py` at the new directory;
+  4. set `cloudcredential.openshift.io/upgradeable-to` on the spoke.
 
 **`--legacy-mint-credentials`** generates the previous Mint-mode overlay: the account-admin installer policy, with the key stored on the spoke. It exists only as a rollback while the scoped workflow is validated, and prints a warning.
 
@@ -325,6 +333,23 @@ By default the tool runs `kustomize build` on both the `hive/` and `crossplane/`
 
 If the target cluster directory already exists, the tool refuses to overwrite it unless `--force` is passed.
 
+### Release check
+
+For AWS clusters with scoped credentials (the default) the scaffold verifies the operator policies in `aws_policies.py` against the CredentialsRequests of the OpenShift release after `kustomize build`:
+
+1. The release image is derived from `--image-set` by naming convention: `img<version>-x86-64-appsub` maps to `quay.io/openshift-release-dev/ocp-release:<version>-x86_64`. The scaffold does not read the hub's ClusterImageSet, so when `spec.releaseImage` differs from the convention pass `--release-image PULLSPEC`. An image-set name outside the convention fails the check.
+2. `oc adm release extract --credentials-requests --cloud=aws --included --install-config=<rendered install-config>` extracts the CredentialsRequests the installer would apply for this cluster. The repository is public; no pull secret is used. This takes about 20 seconds.
+3. The requests are compared with `COMPONENTS` and the rendered policies: every AWS CredentialsRequest needs a scoped policy, every `COMPONENTS` entry must exist in the release, each operator's target Secret (namespace and name) must match, and every requested action must be granted (IAM wildcards in the policy match; `INTENTIONALLY_DROPPED` lists deliberate omissions).
+
+On success the log ends with `Release check: <n> CredentialsRequests from <source> covered by the scoped policies.` On any difference the command exits `1` with one line per gap, for example `machine-api lacks ec2:AllocateHosts, ec2:ReleaseHosts`. The overlay has already been written at that point; fix `aws_policies.py`, refresh the fixtures (see [Limits and residuals](#aws-credentials-cluster-scoped-default)) and regenerate the overlay with `--force`.
+
+Flags:
+- `--release-image PULLSPEC`: check against this release instead of the one derived from `--image-set`.
+- `--credentials-requests-dir DIR`: check against manifests already extracted into `DIR` (offline runs, CI, fixture refresh); `oc` is not needed.
+- `--skip-release-check`: skip the check. The scoped policies are then unverified for that release. Not for normal use.
+
+The check is reported as not applicable for `--legacy-mint-credentials` and for Azure, which have no scoped policies. It runs even with `--skip-validation`.
+
 ## Development
 
 ### Running tests
@@ -340,6 +365,8 @@ Or directly with pytest:
 pip install pytest
 pytest tests/ -v
 ```
+
+The tests never run `oc`: the CLI tests patch the extraction and compare against `tests/fixtures/credentialsrequests/aws-4.21`. To scaffold without `oc` or network access, pass `--credentials-requests-dir tests/fixtures/credentialsrequests/aws-4.21`.
 
 ### Linting
 

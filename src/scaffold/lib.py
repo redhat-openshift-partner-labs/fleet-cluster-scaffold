@@ -24,6 +24,7 @@ __all__ = [
     "generate_hive_patches",
     "generate_metadata",
     "get_default_zones",
+    "render_install_config",
     "validate_cluster_name",
     "validate_profile",
     "write_cluster_dir",
@@ -150,6 +151,11 @@ def _install_config(params: ClusterParams) -> dict:
     }
 
 
+def render_install_config(params: ClusterParams) -> str:
+    """The install-config.yaml Hive hands to the installer, as embedded in the install-config Secret."""
+    return dump(_install_config(params))
+
+
 def generate_hive_patches(params: ClusterParams, hive_base_path: str = "../base/hive") -> dict[str, str]:
     n = params.name
     provider = get_provider(params.cloud)
@@ -192,7 +198,7 @@ def generate_hive_patches(params: ClusterParams, hive_base_path: str = "../base/
             "namespace": "cluster-placeholder",
         },
         "type": "Opaque",
-        "stringData": {"install-config.yaml": _LiteralStr(dump(_install_config(params)))},
+        "stringData": {"install-config.yaml": _LiteralStr(render_install_config(params))},
     })
 
     patches["patches/install-config-meta.yaml"] = dump(rename_ops(f"{n}-install-config", n))
