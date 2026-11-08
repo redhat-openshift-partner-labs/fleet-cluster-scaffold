@@ -183,6 +183,9 @@ def check_release(provider: Provider, params: ClusterParams, parsed: argparse.Na
             requests = release.load_credentials_requests(source)
         else:
             source = parsed.release_image or release.release_image_for(params.image_set)
+            # oc pulls release metadata from the registry here; nothing is printed until it returns
+            _LOG.info("  -> release check:\n  -> -> extracting CredentialsRequests from %s \n  -> -> (oc adm release extract, up to %ds)",
+                      source, release.EXTRACT_TIMEOUT)
             with tempfile.TemporaryDirectory(prefix="fleet-scaffold-release-") as workdir:
                 requests = release.extract_credentials_requests(source, render_install_config(params), params.cloud, workdir)
     except release.ReleaseError as exc:
@@ -196,7 +199,7 @@ def check_release(provider: Provider, params: ClusterParams, parsed: argparse.Na
         _LOG.error("Update aws_policies.py (and refresh tests/fixtures/credentialsrequests/), "
                    "or pass --skip-release-check to scaffold without verification.")
         return 1
-    _LOG.info("Release check: %d CredentialsRequests from %s covered by the scoped policies.", len(requests), source)
+    _LOG.info("  -> -> Release check: %d CredentialsRequests from %s covered by the scoped policies.", len(requests), source)
     return 0
 
 
@@ -275,7 +278,7 @@ def main(args=None) -> int:  # pylint: disable=too-many-return-statements
     if rc:
         return rc
 
-    _LOG.info("Cluster %r scaffolded successfully", params.name)
+    _LOG.info("  -> -> Cluster %r scaffolded successfully", params.name)
     return 0
 
 
