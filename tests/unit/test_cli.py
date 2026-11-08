@@ -688,6 +688,9 @@ def _load_one(path):
 def test_release_check_runs_against_the_image_set_release(tmp_path, caplog, release_from_fixtures):
     caplog.set_level(logging.INFO, logger="scaffold")
     assert main(_aws_args(tmp_path, "rc1")) == 0
+    # Announced before the extraction: oc prints nothing while it pulls
+    assert (f"  -> release check: extracting CredentialsRequests from {RELEASE_IMAGE} "
+            "(oc adm release extract, up to 300s)") in caplog.text
     assert f"Release check: 6 CredentialsRequests from {RELEASE_IMAGE} covered by the scoped policies." in caplog.text
     (call,) = release_from_fixtures.call_args_list
     image, install_config, cloud, _workdir = call.args
