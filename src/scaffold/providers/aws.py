@@ -19,7 +19,16 @@ if TYPE_CHECKING:  # type-only: params imports providers at runtime
     from scaffold.release import CredentialsRequest
 
 from scaffold.providers import aws_policies as pol
-from scaffold.providers.base import Provider, dump, rename_ops, replace, target
+from scaffold.providers.base import (
+    ANNOTATION_CREDENTIALS_REQUEST,
+    ANNOTATION_TARGET_NAMESPACE,
+    ANNOTATION_TARGET_SECRET,
+    Provider,
+    dump,
+    rename_ops,
+    replace,
+    target,
+)
 
 _LOG = logging.getLogger("scaffold")
 
@@ -179,8 +188,11 @@ class AWSProvider(Provider):
             files[path] = dump(ops)
 
         def user_set(group: str, placeholders: tuple[str, ...], names: tuple[str, ...], policy_doc: dict,
-                     secret: str | None = None) -> None:
-            """Patches for one User/Policy/UserPolicyAttachment/AccessKey set."""
+                     secret: str | None = None, annotations: dict[str, str] | None = None) -> None:
+            """Patches for one User/Policy/UserPolicyAttachment/AccessKey set.
+
+            annotations go on the AccessKey (operator sets only); the base AccessKeys carry none.
+            """
             user, policy, attach, key = names
             p_user, p_policy, p_attach, p_key = placeholders
             add("User", p_user, f"patches/{group}/user.yaml", rename_ops(user, n) + [tag_op])
@@ -196,6 +208,8 @@ class AWSProvider(Provider):
             ]
             if secret:
                 key_ops.append(replace("/spec/writeConnectionSecretToRef/name", secret))
+            if annotations:
+                key_ops.append({"op": "add", "path": "/metadata/annotations", "value": annotations})
             add("AccessKey", p_key, f"patches/{group}/access-key.yaml", key_ops)
 
         # Installer keeps the legacy resource names so existing pipeline tasks keep working
@@ -218,5 +232,10 @@ class AWSProvider(Provider):
                 (base, f"{base}-policy", f"{base}-attachment", f"{base}-access-key"),
                 pol.component_policy(c.key, n, region, domain),
                 secret=f"{base}-credentials-raw",
+                annotations={
+                    ANNOTATION_CREDENTIALS_REQUEST: c.credentials_request,
+                    ANNOTATION_TARGET_NAMESPACE: c.namespace,
+                    ANNOTATION_TARGET_SECRET: c.secret,
+                },
             )
         return entries, files

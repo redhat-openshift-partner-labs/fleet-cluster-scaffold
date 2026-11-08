@@ -14,6 +14,12 @@ from scaffold.lib import (
     validate_profile,
     write_cluster_dir,
 )
+from scaffold.providers import aws_policies as pol
+from scaffold.providers.base import (
+    ANNOTATION_CREDENTIALS_REQUEST,
+    ANNOTATION_TARGET_NAMESPACE,
+    ANNOTATION_TARGET_SECRET,
+)
 
 
 # ===================== get_default_zones tests =====================
@@ -258,6 +264,33 @@ class TestGenerateCrossplanePatches:
             if op["path"] == "/spec/writeConnectionSecretToRef/namespace"
         ]
         assert ns_ops[0]["value"] == "my-cluster"
+
+
+# ===================== scoped AccessKey target annotations =====================
+
+
+def _annotation_ops(patches, path):
+    return [op for op in yaml.safe_load(patches[path]) if op["path"] == "/metadata/annotations"]
+
+
+class TestScopedAccessKeyAnnotations:
+    """Operator AccessKeys name their CredentialsRequest and spoke Secret; the installer AccessKey carries none."""
+
+    @pytest.mark.parametrize("component", pol.COMPONENTS, ids=lambda c: c.key)
+    def test_operator_access_key_names_its_target(self, params, component):
+        (op,) = _annotation_ops(generate_crossplane_patches(params), f"patches/{component.key}/access-key.yaml")
+        assert op["op"] == "add"
+        assert op["value"] == {
+            ANNOTATION_CREDENTIALS_REQUEST: component.credentials_request,
+            ANNOTATION_TARGET_NAMESPACE: component.namespace,
+            ANNOTATION_TARGET_SECRET: component.secret,
+        }
+
+    def test_installer_access_key_has_no_annotations(self, params):
+        assert _annotation_ops(generate_crossplane_patches(params), "patches/installer/access-key.yaml") == []
+
+    def test_legacy_access_key_has_no_annotations(self, legacy_params):
+        assert _annotation_ops(generate_crossplane_patches(legacy_params), "patches/access-key.yaml") == []
 
 
 # ===================== write_cluster_dir tests =====================

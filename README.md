@@ -160,6 +160,8 @@ IAM patterns match the infra ID as `<prefix>-?????`: `<prefix>` is the name cut 
 **Fleet pipeline contract** (`metadata.yaml`: `aws-credentials-mode: scoped`):
 1. Wait for the Secrets `<name>-<operator>-credentials-raw` (keys `username`/`password`) written by the Crossplane AccessKeys.
 2. Build Secret `<name>-cloud-credentials-manifests`. It holds one Secret manifest per operator, each with `aws_access_key_id`/`aws_secret_access_key` for that operator's target namespace and name (see `COMPONENTS` in `aws_policies.py`). The ClusterDeployment references it as `spec.provisioning.manifestsSecretRef`.
+
+   Each operator AccessKey carries the annotations `openshiftpartnerlabs.com/credentials-request`, `openshiftpartnerlabs.com/target-namespace` and `openshiftpartnerlabs.com/target-secret`, with the values from `COMPONENTS`. The installer AccessKey `<name>-access-key` carries none of them, which is how a consumer tells the two apart. A pipeline image that reads the annotations needs no copy of the operator list; that fleet change is tracked separately.
 3. After Hive reports the cluster installed (before handoff), substitute `INFRA_ID_PLACEHOLDER` with `ClusterDeployment.spec.clusterMetadata.infraID`, and `VPC_ID_PLACEHOLDER` with the cluster VPC ID, in the cluster's Crossplane Policies and Roles. Until then the placeholders match nothing (fail closed). Afterwards:
    - resources tagged only `kubernetes.io/cluster/<infraID>=owned` are also treated as owned. machine-api, EBS CSI and the cloud-controller-manager always apply that tag at create time, so partner `LoadBalancer` Services work without annotations.
    - egress-IP ENI changes are limited to the cluster VPC.
