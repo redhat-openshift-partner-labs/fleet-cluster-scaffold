@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any
 
 import yaml
 
 if TYPE_CHECKING:  # type-only: params imports providers at runtime
     from scaffold.params import ClusterParams
+    from scaffold.release import CredentialsRequest
 
 
 # Ownership label on every overlay resource (selector for per-cluster teardown)
@@ -78,6 +80,15 @@ class Provider:
     def metadata(self, params: ClusterParams) -> dict[str, str]:  # pylint: disable=unused-argument
         """Per-cluster metadata.yaml keys read by the fleet pipelines."""
         return {"platform": self.name}
+
+    def release_check_applies(self, params: ClusterParams) -> bool:  # pylint: disable=unused-argument
+        """Whether the overlay carries scoped policies to verify against the release's CredentialsRequests."""
+        return False
+
+    def release_gaps(self, params: ClusterParams,  # pylint: disable=unused-argument
+                     requests: Iterable[CredentialsRequest]) -> list[str]:
+        """Differences between the release's CredentialsRequests and the overlay's policies; empty when covered."""
+        return []
 
     def machinepool_ops(self, params: ClusterParams) -> list[dict[str, Any]]:
         """Ops for /spec/platform/<cloud> on the worker MachinePool."""

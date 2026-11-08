@@ -1,3 +1,4 @@
+import logging
 import os
 import shutil
 from pathlib import Path
@@ -8,6 +9,18 @@ import pytest
 import yaml
 
 from scaffold.cli import main
+from scaffold.release import ReleaseError, load_credentials_requests
+
+FIXTURES = Path(__file__).parent.parent / "fixtures" / "credentialsrequests" / "aws-4.21"
+RELEASE_IMAGE = "quay.io/openshift-release-dev/ocp-release:4.21.13-x86_64"
+
+
+@pytest.fixture(autouse=True)
+def release_from_fixtures():
+    """Every CLI run compares the scoped policies against the vendored 4.21 CredentialsRequests; no oc, no network."""
+    with mock.patch("scaffold.release.extract_credentials_requests",
+                    return_value=load_credentials_requests(FIXTURES)) as extract:
+        yield extract
 
 
 @pytest.fixture()
@@ -633,3 +646,141 @@ def test_stale_base_is_rejected(tmp_path):
     rg = templates / "azure" / "standard" / "crossplane" / "resource-group.yaml"
     rg.write_text(rg.read_text().replace("name: cluster-placeholder-rg", "name: cluster-placeholder-old-rg"))
     assert main(_validate_args(tmp_path, "azure", "standard", templates)) == 1
+
+
+# ======== Release check (scoped AWS policies vs the release's CredentialsRequests) ========
+
+MACHINE_API_FIXTURE = "0000_30_machine-api-operator_00_credentials-request.yaml"
+INGRESS_FIXTURE = "0000_50_cluster-ingress-operator_00-ingress-credentials-request.yaml"
+
+
+def _fixtures_copy(tmp_path):
+    return Path(shutil.copytree(FIXTURES, tmp_path / "credentials-requests"))
+
+
+def _load_one(path):
+    return next(d for d in yaml.safe_load_all(path.read_text()) if d)
+
+
+def test_release_check_runs_against_the_image_set_release(tmp_path, caplog, release_from_fixtures):
+    caplog.set_level(logging.INFO, logger="scaffold")
+    assert main(_aws_args(tmp_path, "rc1")) == 0
+    assert f"Release check: 6 CredentialsRequests from {RELEASE_IMAGE} covered by the scoped policies." in caplog.text
+    (call,) = release_from_fixtures.call_args_list
+    image, install_config, cloud, _workdir = call.args
+    assert (image, cloud) == (RELEASE_IMAGE, "aws")
+    # The extraction sees the same install-config the overlay embeds (capabilities and feature set drive --included)
+    ic = yaml.safe_load((tmp_path / "rc1" / "hive" / "patches" / "install-config.yaml").read_text())
+    assert install_config == ic["stringData"]["install-config.yaml"]
+    assert yaml.safe_load(install_config)["credentialsMode"] == "Manual"
+
+
+def test_release_image_override_is_forwarded(tmp_path, release_from_fixtures):
+    assert main(_aws_args(tmp_path, "rc2", "--release-image", "quay.io/example/release:1")) == 0
+    assert release_from_fixtures.call_args.args[0] == "quay.io/example/release:1"
+
+
+def test_unknown_image_set_fails_closed(tmp_path, caplog, release_from_fixtures):
+    assert main(_aws_args(tmp_path, "rc3", "--image-set", "custom-name")) == 1
+    assert "Release check failed:" in caplog.text
+    assert "--release-image" in caplog.text and "--skip-release-check" in caplog.text
+    release_from_fixtures.assert_not_called()
+
+
+def test_skip_release_check(tmp_path, caplog, release_from_fixtures):
+    caplog.set_level(logging.INFO, logger="scaffold")
+    assert main(_aws_args(tmp_path, "rc4", "--skip-release-check")) == 0
+    assert ("Skipping release check (--skip-release-check): the scoped policies were not verified against "
+            "img4.21.13-x86-64-appsub.") in caplog.text
+    release_from_fixtures.assert_not_called()
+
+
+def test_credentials_requests_dir_replaces_extraction(tmp_path, caplog, release_from_fixtures):
+    caplog.set_level(logging.INFO, logger="scaffold")
+    assert main(_aws_args(tmp_path, "rc5", "--credentials-requests-dir", str(FIXTURES))) == 0
+    assert f"Release check: 6 CredentialsRequests from {FIXTURES} covered by the scoped policies." in caplog.text
+    release_from_fixtures.assert_not_called()
+
+
+def test_operator_without_scoped_policy_fails(tmp_path, caplog):
+    crs = _fixtures_copy(tmp_path)
+    extra = _load_one(crs / MACHINE_API_FIXTURE)
+    extra["metadata"]["name"] = "openshift-cluster-api-aws"
+    (crs / "zz_cluster-api.yaml").write_text(yaml.safe_dump(extra))
+    assert main(_aws_args(tmp_path, "rc6", "--credentials-requests-dir", str(crs))) == 1
+    assert f"Release check failed against {crs}:" in caplog.text
+    assert "no scoped policy for CredentialsRequest 'openshift-cluster-api-aws'" in caplog.text
+    assert "Update aws_policies.py" in caplog.text
+
+
+def test_action_missing_from_scoped_policy_fails(tmp_path, caplog):
+    crs = _fixtures_copy(tmp_path)
+    doc = _load_one(crs / MACHINE_API_FIXTURE)
+    doc["spec"]["providerSpec"]["statementEntries"][0]["action"].append("ec2:AllocateHosts")
+    (crs / MACHINE_API_FIXTURE).write_text(yaml.safe_dump(doc))
+    assert main(_aws_args(tmp_path, "rc7", "--credentials-requests-dir", str(crs))) == 1
+    assert "machine-api lacks ec2:AllocateHosts" in caplog.text
+
+
+def test_operator_absent_from_release_fails(tmp_path, caplog):
+    crs = _fixtures_copy(tmp_path)
+    (crs / INGRESS_FIXTURE).unlink()
+    assert main(_aws_args(tmp_path, "rc8", "--credentials-requests-dir", str(crs))) == 1
+    assert "ingress: CredentialsRequest 'openshift-ingress' is not in this release" in caplog.text
+
+
+def test_extraction_error_fails(tmp_path, caplog, release_from_fixtures):
+    release_from_fixtures.side_effect = ReleaseError("boom")
+    assert main(_aws_args(tmp_path, "rc9")) == 1
+    assert "Release check failed: boom" in caplog.text
+
+
+def test_release_check_not_applicable_without_scoped_policies(tmp_path, caplog, release_from_fixtures):
+    caplog.set_level(logging.INFO, logger="scaffold")
+    assert main(_aws_args(tmp_path, "rc10", "--legacy-mint-credentials")) == 0
+    assert main(_azure_args(tmp_path, "rc11")) == 0
+    assert caplog.text.count("Release check not applicable (no scoped policies for this configuration).") == 2
+    release_from_fixtures.assert_not_called()
+
+
+@pytest.mark.parametrize("flags", [
+    ["--skip-release-check", "--release-image", "quay.io/example/release:1"],
+    ["--skip-release-check", "--credentials-requests-dir", str(FIXTURES)],
+    ["--release-image", "quay.io/example/release:1", "--credentials-requests-dir", str(FIXTURES)],
+], ids=["skip+image", "skip+dir", "image+dir"])
+def test_conflicting_release_flags_exit_2(tmp_path, flags, release_from_fixtures):
+    with pytest.raises(SystemExit) as exc:
+        main(_aws_args(tmp_path, "rc12", *flags))
+    assert exc.value.code == 2
+    assert not (tmp_path / "rc12").exists()
+    release_from_fixtures.assert_not_called()
+
+
+def test_release_check_runs_after_kustomize_validation(tmp_path, release_from_fixtures):
+    order = mock.Mock()
+    order.attach_mock(release_from_fixtures, "extract")
+    kustomize = mock.Mock(return_value=subprocess.CompletedProcess([], 0, stdout="", stderr=""))
+    order.attach_mock(kustomize, "kustomize")
+    args = [a for a in _aws_args(tmp_path, "rc13") if a != "--skip-validation"]
+    with mock.patch("scaffold.cli.shutil.which", return_value="/usr/bin/kustomize"), \
+            mock.patch("scaffold.cli.subprocess.run", kustomize):
+        assert main(args) == 0
+    assert [name for name, *_ in order.mock_calls] == ["kustomize", "kustomize", "extract"]
+
+
+def test_kustomize_failure_short_circuits_release_check(tmp_path, release_from_fixtures):
+    args = [a for a in _aws_args(tmp_path, "rc14") if a != "--skip-validation"]
+    failed = subprocess.CompletedProcess([], 1, stdout="", stderr="error")
+    with mock.patch("scaffold.cli.shutil.which", return_value="/usr/bin/kustomize"), \
+            mock.patch("scaffold.cli.subprocess.run", return_value=failed):
+        assert main(args) == 1
+    release_from_fixtures.assert_not_called()
+
+
+def test_help_lists_release_flags(capsys):
+    with pytest.raises(SystemExit) as exc:
+        main(["aws", "--help"])
+    assert exc.value.code == 0
+    out = capsys.readouterr().out
+    for flag in ("--release-image", "--credentials-requests-dir", "--skip-release-check"):
+        assert flag in out
