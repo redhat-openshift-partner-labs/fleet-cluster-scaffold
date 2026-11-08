@@ -1,14 +1,35 @@
-"""Loader tests for scaffold.release (CredentialsRequest manifests)."""
+"""Tests for scaffold.release: manifest loader, image-set mapping, oc extraction (mocked)."""
 
+import os
 import pathlib
+import shutil
+import subprocess
+from unittest import mock
 
 import pytest
 import yaml
 
 from scaffold.providers.aws_policies import COMPONENTS
-from scaffold.release import ReleaseError, load_credentials_requests
+from scaffold.release import (
+    RELEASE_REPOSITORY,
+    ReleaseError,
+    extract_credentials_requests,
+    load_credentials_requests,
+    release_image_for,
+)
 
 FIXTURES = pathlib.Path(__file__).parent.parent / "fixtures" / "credentialsrequests" / "aws-4.21"
+INSTALL_CONFIG = "apiVersion: v1\nbaseDomain: example.com\nmetadata:\n  name: demo\n"
+IMAGE = f"{RELEASE_REPOSITORY}:4.21.13-x86_64"
+
+
+def _copy_fixtures(argv, **_kwargs):
+    """Stand-in for oc: write the vendored 4.21 manifests where --to points."""
+    to = next(a for a in argv if a.startswith("--to=")).removeprefix("--to=")
+    os.makedirs(to)
+    for f in FIXTURES.glob("*.yaml"):
+        shutil.copy(f, to)
+    return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
 
 
 def _cr(name, *statements, kind="CredentialsRequest", namespace="ns", secret="creds", provider="AWSProviderSpec"):
@@ -91,3 +112,54 @@ class TestLoadCredentialsRequests:
         (tmp_path / "broken.yaml").write_text("kind: CredentialsRequest\nmetadata: {name: broken}\nspec: {}\n")
         with pytest.raises(ReleaseError, match="broken.yaml"):
             load_credentials_requests(tmp_path)
+
+
+class TestReleaseImageFor:
+    def test_maps_the_hub_image_set_convention(self):
+        assert release_image_for("img4.21.13-x86-64-appsub") == "quay.io/openshift-release-dev/ocp-release:4.21.13-x86_64"
+        assert release_image_for("img4.22.9-x86-64-appsub") == "quay.io/openshift-release-dev/ocp-release:4.22.9-x86_64"
+
+    @pytest.mark.parametrize("image_set", ["custom-name", "img4.21-x86-64-appsub", "img4.21.13-arm64-appsub"])
+    def test_other_names_point_at_the_overrides(self, image_set):
+        with pytest.raises(ReleaseError) as exc:
+            release_image_for(image_set)
+        message = str(exc.value)
+        assert image_set in message
+        assert "--release-image" in message and "--skip-release-check" in message
+
+
+class TestExtractCredentialsRequests:
+    @mock.patch("scaffold.release.subprocess.run", side_effect=_copy_fixtures)
+    @mock.patch("scaffold.release.shutil.which", return_value="/usr/bin/oc")
+    def test_runs_oc_with_the_install_config_and_parses_the_output(self, which, run, tmp_path):
+        requests = extract_credentials_requests(IMAGE, INSTALL_CONFIG, "aws", str(tmp_path))
+        assert {r.name for r in requests} == {c.credentials_request for c in COMPONENTS}
+        which.assert_called_once_with("oc")
+        (call,) = run.call_args_list
+        assert call.args == ([
+            "oc", "adm", "release", "extract", "--credentials-requests", "--cloud=aws", "--included",
+            f"--install-config={os.path.join(tmp_path, 'install-config.yaml')}",
+            f"--to={os.path.join(tmp_path, 'credentials-requests')}", IMAGE],)
+        assert call.kwargs == {"capture_output": True, "text": True, "timeout": 300}
+        assert (tmp_path / "install-config.yaml").read_text() == INSTALL_CONFIG
+
+    @mock.patch("scaffold.release.subprocess.run")
+    @mock.patch("scaffold.release.shutil.which", return_value=None)
+    def test_missing_oc_fails_before_running_anything(self, which, run, tmp_path):
+        with pytest.raises(ReleaseError, match="oc not found on PATH"):
+            extract_credentials_requests(IMAGE, INSTALL_CONFIG, "aws", str(tmp_path))
+        run.assert_not_called()
+
+    @mock.patch("scaffold.release.shutil.which", return_value="/usr/bin/oc")
+    def test_non_zero_exit_reports_image_and_stderr(self, which, tmp_path):
+        proc = subprocess.CompletedProcess([], 1, stdout="", stderr="error: unauthorized: access denied\n")
+        with mock.patch("scaffold.release.subprocess.run", return_value=proc):
+            with pytest.raises(ReleaseError) as exc:
+                extract_credentials_requests(IMAGE, INSTALL_CONFIG, "aws", str(tmp_path))
+        assert IMAGE in str(exc.value) and "unauthorized: access denied" in str(exc.value)
+
+    @mock.patch("scaffold.release.shutil.which", return_value="/usr/bin/oc")
+    def test_timeout_is_a_release_error(self, which, tmp_path):
+        with mock.patch("scaffold.release.subprocess.run", side_effect=subprocess.TimeoutExpired(["oc"], 300)):
+            with pytest.raises(ReleaseError, match="timed out after 300s"):
+                extract_credentials_requests(IMAGE, INSTALL_CONFIG, "aws", str(tmp_path))
