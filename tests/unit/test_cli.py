@@ -730,6 +730,16 @@ def test_credentials_requests_dir_replaces_extraction(tmp_path, caplog, release_
     release_from_fixtures.assert_not_called()
 
 
+def test_release_check_passes_for_ocp_5_0(tmp_path, caplog, release_from_fixtures):
+    """5.0's new actions are granted or withheld by design (INTENTIONALLY_DROPPED), so the check passes."""
+    caplog.set_level(logging.INFO, logger="scaffold")
+    crs = FIXTURES.parent / "aws-5.0"
+    assert main(_aws_args(tmp_path, "rc5b", "--image-set", "img5.0.1-x86-64-appsub",
+                          "--credentials-requests-dir", str(crs))) == 0
+    assert f"  -> -> Release check: 6 CredentialsRequests from {crs} covered by the scoped policies." in caplog.text
+    release_from_fixtures.assert_not_called()
+
+
 def test_operator_without_scoped_policy_fails(tmp_path, caplog):
     crs = _fixtures_copy(tmp_path)
     extra = _load_one(crs / MACHINE_API_FIXTURE)
@@ -744,10 +754,10 @@ def test_operator_without_scoped_policy_fails(tmp_path, caplog):
 def test_action_missing_from_scoped_policy_fails(tmp_path, caplog):
     crs = _fixtures_copy(tmp_path)
     doc = _load_one(crs / MACHINE_API_FIXTURE)
-    doc["spec"]["providerSpec"]["statementEntries"][0]["action"].append("ec2:AllocateHosts")
+    doc["spec"]["providerSpec"]["statementEntries"][0]["action"].append("ec2:StopInstances")
     (crs / MACHINE_API_FIXTURE).write_text(yaml.safe_dump(doc))
     assert main(_aws_args(tmp_path, "rc7", "--credentials-requests-dir", str(crs))) == 1
-    assert "machine-api lacks ec2:AllocateHosts" in caplog.text
+    assert "machine-api lacks ec2:StopInstances" in caplog.text
 
 
 def test_operator_absent_from_release_fails(tmp_path, caplog):

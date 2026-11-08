@@ -19,7 +19,7 @@ kubernetes.io/cluster/<infraID>=owned, which machine-api, EBS CSI and the cloud-
 always apply at create time (so partner LoadBalancer Services need no annotation), and limits
 egress-IP ENI changes to the cluster VPC.
 
-Operator actions mirror the OCP 4.20/4.21 AWS CredentialsRequests
+Operator actions mirror the OCP 4.20 through 5.0 AWS CredentialsRequests
 (`oc adm release extract --credentials-requests --cloud=aws --included`). coverage_gaps() reports
 every difference between a release's CredentialsRequests and these policies; run it on every OCP
 minor upgrade.
@@ -246,7 +246,8 @@ def _cncc(s: _Scope) -> dict:
 def _ebs_csi(s: _Scope) -> dict:
     return _doc(
         _stmt("Read", ["ec2:DescribeInstances", "ec2:DescribeSnapshots", "ec2:DescribeTags", "ec2:DescribeVolumes",
-                       "ec2:DescribeVolumesModifications", "ec2:DescribeAvailabilityZones"]),
+                       "ec2:DescribeVolumesModifications", "ec2:DescribeAvailabilityZones",
+                       "ec2:DescribeInstanceTypes", "ec2:DescribeVolumeStatus"]),
         *_volume_statements(s, "CSI"),
         *_owned("CreateOwnedSnapshot", ["ec2:CreateSnapshot"], _ec2("snapshot"), s.request_tag_any),
         *_owned("SnapshotOwnedVolume", ["ec2:CreateSnapshot"], _ec2("volume"), s.ec2_owned_any),
@@ -286,9 +287,54 @@ def component_policy(key: str, name: str, region: str, base_domain: str) -> dict
 
 # ===================== release coverage =====================
 
-# CredentialsRequest actions the scoped policies deliberately omit, by request name
-INTENTIONALLY_DROPPED: dict[str, frozenset[str]] = {
-    "openshift-ingress": frozenset({"sts:AssumeRole"}),  # shared-VPC hostedZoneRole only; fleet does not use it
+@dataclass(frozen=True)
+class Withheld:
+    """Why a requested action is not granted, and what granting it would take."""
+
+    reason: str  # the risk or non-use that justifies withholding it
+    enable: str  # when to grant it and how to scope it
+
+
+# CredentialsRequest actions the scoped policies deliberately omit, by request name, then action.
+# The operator gets UnauthorizedOperation if it calls one; the README lists these under residuals.
+INTENTIONALLY_DROPPED: dict[str, dict[str, Withheld]] = {
+    "openshift-ingress": {
+        "sts:AssumeRole": Withheld(
+            reason="Only used for a shared-VPC hostedZoneRole; fleet clusters do not use a shared VPC.",
+            enable="If clusters move to a shared VPC: grant it on the one hostedZoneRole ARN only.",
+        ),
+    },
+    "openshift-machine-api-aws": {
+        # Requested since OCP 4.22 for MachineSets that place instances on EC2 Dedicated Hosts
+        "ec2:AllocateHosts": Withheld(
+            reason="Creates Dedicated Hosts, billed per host-hour while allocated, from the account-wide host quota.",
+            enable="When partners need Dedicated Hosts and fleet teardown releases hosts: grant on dedicated-host/* "
+                   "only with the ownership tag in the request (s.request_tag_any), and add AllocateHosts to "
+                   "TagOnLaunch's ec2:CreateAction. First confirm machine-api tags the hosts it allocates.",
+        ),
+        "ec2:ReleaseHosts": Withheld(
+            reason="Only needed together with ec2:AllocateHosts.",
+            enable="Together with ec2:AllocateHosts: grant on dedicated-host/* owned by the cluster (s.ec2_owned_any).",
+        ),
+    },
+    "aws-ebs-csi-driver-operator": {
+        # Requested since OCP 5.0 for PVC-to-PVC cloning (EBS volume clones)
+        "ec2:CopyVolumes": Withheld(
+            reason="Source and copy are both 'volume' resources, so a statement allowing a copy tagged for this "
+                   "cluster also matches a foreign source volume (aws:RequestTag is request-wide). Any volume in "
+                   "the account could be cloned and read.",
+            enable="Only once a condition provably limits the source to owned volumes (verified with a real "
+                   "CopyVolumes call in a sandbox account, not the policy simulator). Until then PVC cloning is "
+                   "unavailable; snapshot restore still works.",
+        ),
+        "ec2:LockSnapshot": Withheld(
+            reason="A compliance-mode lock (up to 36500 days) cannot be removed or shortened by anyone, including "
+                   "the account root, after its cooling-off period; the snapshot blocks teardown and bills until "
+                   "the lock expires or the account is closed.",
+            enable="Only if a condition can restrict locks to governance mode or a short duration for both "
+                   "LockDuration and ExpirationDate requests; scope to owned snapshots (s.ec2_owned_any).",
+        ),
+    },
 }
 
 AWS_PROVIDER_KIND = "AWSProviderSpec"
@@ -324,7 +370,7 @@ def coverage_gaps(requests: Iterable[CredentialsRequest], name: str, region: str
             moved.append(f"{c.key}: CredentialsRequest '{r.name}' targets {r.namespace}/{r.secret}, "
                          f"the scaffold delivers {c.namespace}/{c.secret}")
         granted = _granted_actions(component_policy(c.key, name, region, base_domain))
-        dropped = INTENTIONALLY_DROPPED.get(r.name, frozenset())
+        dropped = INTENTIONALLY_DROPPED.get(r.name, {})
         missing = sorted(a for a in r.actions
                          if a not in dropped and not any(fnmatch.fnmatchcase(a, g) for g in granted))
         if missing:

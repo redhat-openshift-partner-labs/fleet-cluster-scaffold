@@ -216,13 +216,26 @@ This identity can create IAM policies and roles, which is account-admin-equivale
 - **Account-wide reads.** The stock CredentialsRequests need these on `*`, and EC2 `Describe*` calls cannot be scoped by resource. So every spoke can list every cluster's instances, volumes, snapshots, security groups, load balancers and hosted zones, plus every tagged resource in the account. The relevant actions: `ec2:Describe*`, `elasticloadbalancing:Describe*`, `route53:ListHostedZones`, `tag:GetResources`. Spokes can read this inventory but not change it.
 - **The snapshot check fails closed.** It requires the `ec2:Owner` key. If EC2 stops sending it, or install-config points at an AMI copied into this account, machine-api launches fail with `UnauthorizedOperation`.
 - Between install and step 3, partner `LoadBalancer` Services and egress IPs are denied. Partners don't have access yet in that window.
+- **Some requested operator actions are withheld.** The features that need them fail with `UnauthorizedOperation`. See [AWS withheld operator actions](#aws-withheld-operator-actions).
 - Custom operator policies are outside Red Hat's tested configuration. The [release check](#release-check) gates every scaffold run, so a release that changes a CredentialsRequest fails the scaffold instead of installing a cluster whose operator lacks an action. On every OCP minor upgrade:
   1. scaffold a cluster with the new `--image-set` and read the gap lines;
-  2. update `aws_policies.py` until the check passes;
-  3. refresh the fixtures: `oc adm release extract --credentials-requests --cloud=aws --included --install-config=<install-config.yaml> --to tests/fixtures/credentialsrequests/aws-<minor> <release image>`, where `<install-config.yaml>` is the text under `stringData` in `hive/patches/install-config.yaml` of a scaffolded overlay, then point `FIXTURES` in `tests/unit/test_aws_policies.py`, `tests/unit/test_release.py` and `tests/unit/test_cli.py` at the new directory;
+  2. for each missing action, either grant it in `aws_policies.py` scoped to the cluster, or withhold it: add a `Withheld(reason=..., enable=...)` entry to `INTENTIONALLY_DROPPED` and a row to [AWS withheld operator actions](#aws-withheld-operator-actions). Repeat until the check passes;
+  3. add the fixtures: `oc adm release extract --credentials-requests --cloud=aws --included --install-config=<install-config.yaml> --to tests/fixtures/credentialsrequests/aws-<minor> <release image>`, where `<install-config.yaml>` is the text under `stringData` in `hive/patches/install-config.yaml` of a scaffolded overlay. `tests/unit/test_aws_policies.py` checks coverage against every `aws-*` directory. Keep an older directory while clusters still use that release;
   4. set `cloudcredential.openshift.io/upgradeable-to` on the spoke.
 
 **`--legacy-mint-credentials`** generates the previous Mint-mode overlay: the account-admin installer policy, with the key stored on the spoke. It exists only as a rollback while the scoped workflow is validated, and prints a warning.
+
+#### AWS withheld operator actions
+
+These actions appear in the release's CredentialsRequests but are not granted. They are listed in `INTENTIONALLY_DROPPED` in `src/scaffold/providers/aws_policies.py`, where each entry carries a `reason` and an `enable` field. The release check skips them. If the operator calls one, the call fails with `UnauthorizedOperation`.
+
+| Operator (CredentialsRequest) | Action | Since | Feature that fails | Why it is withheld | When and how to grant it |
+|---|---|---|---|---|---|
+| ingress (`openshift-ingress`) | `sts:AssumeRole` | 4.21 or earlier | Publishing DNS through a shared-VPC `hostedZoneRole` | Fleet clusters do not use a shared VPC. | If clusters move to a shared VPC: grant it on the one `hostedZoneRole` ARN only. |
+| machine-api (`openshift-machine-api-aws`) | `ec2:AllocateHosts` | 4.22 | MachineSets that place instances on EC2 Dedicated Hosts | It creates Dedicated Hosts, which are billed per host-hour while allocated and drawn from the account-wide host quota. | When partners need Dedicated Hosts and fleet teardown releases hosts: grant it on `dedicated-host/*` only when the request carries the ownership tag, and add `AllocateHosts` to `TagOnLaunch`'s `ec2:CreateAction`. First confirm that machine-api tags the hosts it allocates. |
+| machine-api (`openshift-machine-api-aws`) | `ec2:ReleaseHosts` | 4.22 | Same as above | Only needed together with `ec2:AllocateHosts`. | Together with `ec2:AllocateHosts`: grant it on `dedicated-host/*` owned by the cluster. |
+| ebs-csi (`aws-ebs-csi-driver-operator`) | `ec2:CopyVolumes` | 5.0 | PVC-to-PVC cloning. Restoring from snapshots still works. | The source and the copy are both `volume` resources, and `aws:RequestTag` applies to the whole request. A statement allowing a copy tagged for this cluster therefore also matches a foreign source volume. Any volume in the account could be cloned, attached and read. | Only once a condition provably limits the source to the cluster's own volumes, verified with a real `CopyVolumes` call in a sandbox account. The policy simulator is not enough. |
+| ebs-csi (`aws-ebs-csi-driver-operator`) | `ec2:LockSnapshot` | 5.0 | Snapshot locking | After the cooling-off period, no one can remove or shorten a compliance-mode lock, including the account root. Locks last up to 36,500 days. The snapshot blocks teardown and keeps billing until the lock expires or the account is closed. | Only if a condition can restrict locks to governance mode or a short duration, for both `LockDuration` and `ExpirationDate` requests. Scope it to the cluster's own snapshots. |
 
 ### Azure
 
@@ -355,9 +368,9 @@ For AWS clusters with scoped credentials (the default) the scaffold verifies the
 
 1. The release image is derived from `--image-set` by naming convention: `img<version>-x86-64-appsub` maps to `quay.io/openshift-release-dev/ocp-release:<version>-x86_64`. The scaffold does not read the hub's ClusterImageSet, so when `spec.releaseImage` differs from the convention pass `--release-image PULLSPEC`. An image-set name outside the convention fails the check.
 2. `oc adm release extract --credentials-requests --cloud=aws --included --install-config=<rendered install-config>` extracts the CredentialsRequests the installer would apply for this cluster. The repository is public; no pull secret is used. This takes about 20 seconds; the log announces it with `-> release check:` followed by `-> -> extracting CredentialsRequests from <image>` and `-> -> (oc adm release extract, up to 300s)`, and prints nothing else until `oc` returns.
-3. The requests are compared with `COMPONENTS` and the rendered policies: every AWS CredentialsRequest needs a scoped policy, every `COMPONENTS` entry must exist in the release, each operator's target Secret (namespace and name) must match, and every requested action must be granted (IAM wildcards in the policy match; `INTENTIONALLY_DROPPED` lists deliberate omissions).
+3. The requests are compared with `COMPONENTS` and the rendered policies: every AWS CredentialsRequest needs a scoped policy, every `COMPONENTS` entry must exist in the release, each operator's target Secret (namespace and name) must match, and every requested action must be granted (IAM wildcards in the policy match; actions in `INTENTIONALLY_DROPPED` are skipped, see [AWS withheld operator actions](#aws-withheld-operator-actions)).
 
-On success the log shows `-> -> Release check: <n> CredentialsRequests from <source> covered by the scoped policies.` followed by `-> -> Cluster '<name>' scaffolded successfully`. On any difference the command exits `1` with one line per gap, for example `machine-api lacks ec2:AllocateHosts, ec2:ReleaseHosts`. The overlay has already been written at that point; fix `aws_policies.py`, refresh the fixtures (see [Limits and residuals](#aws-credentials-cluster-scoped-default)) and regenerate the overlay with `--force`.
+On success the log shows `-> -> Release check: <n> CredentialsRequests from <source> covered by the scoped policies.` followed by `-> -> Cluster '<name>' scaffolded successfully`. On any difference the command exits `1` with one line per gap, for example `ebs-csi lacks ec2:DescribeVolumeStatus`. The overlay has already been written at that point; fix `aws_policies.py`, refresh the fixtures (see [Limits and residuals](#aws-credentials-cluster-scoped-default)) and regenerate the overlay with `--force`.
 
 Flags:
 - `--release-image PULLSPEC`: check against this release instead of the one derived from `--image-set`.
@@ -382,7 +395,7 @@ pip install pytest
 pytest tests/ -v
 ```
 
-The tests never run `oc`: the CLI tests patch the extraction and compare against `tests/fixtures/credentialsrequests/aws-4.21`. To scaffold without `oc` or network access, pass `--credentials-requests-dir tests/fixtures/credentialsrequests/aws-4.21`.
+The tests never run `oc`: the CLI tests patch the extraction and compare against `tests/fixtures/credentialsrequests/aws-4.21`. To scaffold without `oc` or network access, pass `--credentials-requests-dir tests/fixtures/credentialsrequests/aws-4.21` (or `aws-5.0` with `--image-set img5.0.1-x86-64-appsub`).
 
 ### Linting
 
