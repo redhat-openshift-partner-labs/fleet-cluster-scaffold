@@ -184,7 +184,7 @@ def check_release(provider: Provider, params: ClusterParams, parsed: argparse.Na
         else:
             source = parsed.release_image or release.release_image_for(params.image_set)
             # oc pulls release metadata from the registry here; nothing is printed until it returns
-            _LOG.info("  -> release check:\n  -> -> extracting CredentialsRequests from %s \n  -> -> (oc adm release extract, up to %ds)",
+            _LOG.info("  -> release check:\n  -> -> extracting CredentialsRequests from %s\n  -> -> (oc adm release extract, up to %ds)",
                       source, release.EXTRACT_TIMEOUT)
             with tempfile.TemporaryDirectory(prefix="fleet-scaffold-release-") as workdir:
                 requests = release.extract_credentials_requests(source, render_install_config(params), params.cloud, workdir)
