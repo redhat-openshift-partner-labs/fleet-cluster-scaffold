@@ -12,9 +12,13 @@ from scaffold.release import CredentialsRequest, load_credentials_requests
 
 NAME, REGION, DOMAIN = "10f25620-vscopeocpv", "us-east-2", "openshiftpartnerlabs.com"
 PREFIX = pol.infra_prefix(NAME)
-FIXTURES = pathlib.Path(__file__).parent.parent / "fixtures" / "credentialsrequests" / "aws-4.21"
+FIXTURES_ROOT = pathlib.Path(__file__).parent.parent / "fixtures" / "credentialsrequests"
+FIXTURES = FIXTURES_ROOT / "aws-4.21"  # base for the drift tests in TestCoverageGaps
 REQUESTS = load_credentials_requests(FIXTURES)
 BY_NAME = {r.name: r for r in REQUESTS}
+# Every vendored release (aws-<minor>); the policies must cover all of them while clusters use any of them
+RELEASES = {d.name: load_credentials_requests(d) for d in sorted(FIXTURES_ROOT.glob("aws-*"))}
+README = pathlib.Path(__file__).parents[2] / "README.md"
 
 # Mutating action verbs that must never be allowed account-wide on the spoke
 MUTATING = ("Terminate", "Delete", "Detach", "Attach", "Modify", "Revoke", "Authorize", "Deregister",
@@ -63,15 +67,17 @@ class TestInfraPrefix:
         assert not fnmatch.fnmatchcase("0171d46a-scopedaws-2-fz9mx", pattern)  # sibling 0171d46a-scopedaws-2
 
 
+@pytest.mark.parametrize("release", RELEASES)
 class TestCredentialsRequestCoverage:
-    def test_fixtures_have_no_gaps(self):
-        assert _gaps(REQUESTS) == []
+    def test_fixtures_have_no_gaps(self, release):
+        assert _gaps(RELEASES[release]) == []
 
     @pytest.mark.parametrize("component", pol.COMPONENTS, ids=lambda c: c.key)
-    def test_every_required_action_is_granted(self, component):
+    def test_every_required_action_is_granted(self, release, component):
         """Same check as coverage_gaps, one test per operator so a failure names it."""
-        required = set(BY_NAME[component.credentials_request].actions)
-        required -= pol.INTENTIONALLY_DROPPED.get(component.credentials_request, frozenset())
+        by_name = {r.name: r for r in RELEASES[release]}
+        required = set(by_name[component.credentials_request].actions)
+        required -= set(pol.INTENTIONALLY_DROPPED.get(component.credentials_request, {}))
         granted = _allowed_actions(pol.component_policy(component.key, NAME, REGION, DOMAIN))
         missing = {a for a in required if not any(fnmatch.fnmatchcase(a, g) for g in granted)}
         assert not missing, f"{component.key} lacks {sorted(missing)}"
@@ -103,9 +109,9 @@ class TestCoverageGaps:
             "the scaffold delivers openshift-ingress-operator/cloud-credentials"]
 
     def test_missing_actions_are_reported_sorted(self):
-        """OCP 4.22 adds these two to machine-api; the scoped policy does not grant them."""
-        actions = (*BY_NAME[self.MACHINE_API].actions, "ec2:ReleaseHosts", "ec2:AllocateHosts")
-        assert _gaps(self._with(self.MACHINE_API, actions=actions)) == ["machine-api lacks ec2:AllocateHosts, ec2:ReleaseHosts"]
+        actions = (*BY_NAME[self.MACHINE_API].actions, "ec2:StopInstances", "ec2:ModifyInstanceAttribute")
+        assert _gaps(self._with(self.MACHINE_API, actions=actions)) == [
+            "machine-api lacks ec2:ModifyInstanceAttribute, ec2:StopInstances"]
 
     def test_wildcard_grant_covers_action(self):
         actions = (*BY_NAME["aws-ebs-csi-driver-operator"].actions, "kms:ReEncryptFrom")  # granted as kms:ReEncrypt*
@@ -115,6 +121,26 @@ class TestCoverageGaps:
         assert "sts:AssumeRole" in BY_NAME["openshift-ingress"].actions
         assert "sts:AssumeRole" in pol.INTENTIONALLY_DROPPED["openshift-ingress"]
         assert _gaps(REQUESTS) == []
+
+    def test_withheld_5_0_actions_are_not_gaps(self):
+        """OCP 5.0 requests these four; they are withheld by design, not missing."""
+        by_name = {r.name: r for r in RELEASES["aws-5.0"]}
+        for request, actions in (("openshift-machine-api-aws", {"ec2:AllocateHosts", "ec2:ReleaseHosts"}),
+                                 ("aws-ebs-csi-driver-operator", {"ec2:CopyVolumes", "ec2:LockSnapshot"})):
+            assert actions <= set(by_name[request].actions)
+            assert actions <= set(pol.INTENTIONALLY_DROPPED[request])
+        assert _gaps(RELEASES["aws-5.0"]) == []
+
+    @pytest.mark.parametrize(("request_name", "action"),
+                             [(r, a) for r, actions in pol.INTENTIONALLY_DROPPED.items() for a in actions])
+    def test_withheld_action_is_documented_and_not_granted(self, request_name, action):
+        """Every withheld action states its reason and enable steps, is listed in the README, and stays ungranted."""
+        entry = pol.INTENTIONALLY_DROPPED[request_name][action]
+        assert entry.reason.strip() and entry.enable.strip()
+        assert f"`{action}`" in README.read_text()
+        component = next(c for c in pol.COMPONENTS if c.credentials_request == request_name)
+        granted = _allowed_actions(pol.component_policy(component.key, NAME, REGION, DOMAIN))
+        assert not any(fnmatch.fnmatchcase(action, g) for g in granted)
 
     def test_other_providers_are_ignored(self):
         azure = CredentialsRequest("openshift-ingress-azure", "AzureProviderSpec", "openshift-ingress-operator",
