@@ -167,6 +167,20 @@ IAM patterns match the infra ID as `<prefix>-?????`: `<prefix>` is the name cut 
    - egress-IP ENI changes are limited to the cluster VPC.
 4. Pre-provision waits until all of the cluster's Crossplane IAM resources report `Ready` before provisioning.
 
+#### Why ccoctl is not used
+
+`ccoctl` is the OpenShift tool that creates the operator IAM roles for an AWS STS cluster from the release's CredentialsRequests. The scaffold renders its own policies and has Crossplane create the IAM resources, for these reasons:
+
+- **The default `ccoctl` policies are account-wide.** `ccoctl aws create-iam-roles` copies each CredentialsRequest statement into the role policy. Every statement in the 4.21 requests has `resource: '*'`. One cluster's machine-api credential could then terminate another cluster's instances, which breaks the isolation rule above.
+- **Narrowed CredentialsRequests would give the same isolation at a higher cost.** `ccoctl` passes a narrowed `resource` and a `policyCondition` through to the role policy, so it could deliver the policies in `aws_policies.py`. The permissions would be identical. A statement accepts one `resource` string, so each multi-resource statement would have to be split. IAM creation would move from Crossplane reconciliation to a pipeline step that holds IAM and S3 write credentials.
+- **STS changes the credential type and leaves the permissions unchanged.** The roles `ccoctl` creates are assumed with a service account token (`sts:AssumeRoleWithWebIdentity`). A cluster-admin can request a token for any operator service account, so a partner reaches the same policies as with the per-operator IAM users.
+- **STS adds a per-cluster OIDC issuer to protect.** Its key document must be publicly readable. A principal that can replace the document can assume every operator role of that cluster. Teardown must delete the IAM OIDC provider and the roles together with the issuer bucket.
+
+Costs of the current design:
+
+- The operators use long-lived IAM user access keys. STS credentials expire after about an hour. If short-lived credentials become a requirement, Crossplane can create the OIDC provider and the roles with the same scoped policies.
+- The custom policies are outside Red Hat's tested configuration; see **Limits and residuals** below.
+
 #### AWS hub prerequisites (scoped clusters)
 
 The hub's Crossplane AWS identity (`crossplane-system/aws-credentials`, ProviderConfig `default`) creates, updates and deletes each cluster's IAM resources. On top of the user, policy and access-key permissions legacy clusters already need, scoped clusters require:
