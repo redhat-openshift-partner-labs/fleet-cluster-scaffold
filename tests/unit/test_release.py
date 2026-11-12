@@ -119,7 +119,10 @@ class TestReleaseImageFor:
         assert release_image_for("img4.21.13-x86-64-appsub") == "quay.io/openshift-release-dev/ocp-release:4.21.13-x86_64"
         assert release_image_for("img4.22.9-x86-64-appsub") == "quay.io/openshift-release-dev/ocp-release:4.22.9-x86_64"
 
-    @pytest.mark.parametrize("image_set", ["custom-name", "img4.21-x86-64-appsub", "img4.21.13-arm64-appsub"])
+    def test_maps_a_multi_arch_image_set_to_the_multi_tag(self):
+        assert release_image_for("img4.22.22-multi-appsub") == "quay.io/openshift-release-dev/ocp-release:4.22.22-multi"
+
+    @pytest.mark.parametrize("image_set", ["custom-name", "img4.21-x86-64-appsub", "img4.21.13-arm64-appsub", "img4.22.22-multi"])
     def test_other_names_point_at_the_overrides(self, image_set):
         with pytest.raises(ReleaseError) as exc:
             release_image_for(image_set)

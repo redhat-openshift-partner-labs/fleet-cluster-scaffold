@@ -72,8 +72,9 @@ def load_credentials_requests(path: str | os.PathLike) -> list[CredentialsReques
 
 
 RELEASE_REPOSITORY = "quay.io/openshift-release-dev/ocp-release"
-# Hub ClusterImageSet naming convention: img<major>.<minor>.<patch>-x86-64-appsub
-IMAGE_SET_RE = re.compile(r"^img(\d+\.\d+\.\d+)-x86-64-appsub$")
+# Hub ClusterImageSet naming convention: img<major>.<minor>.<patch>-<arch>-appsub
+IMAGE_SET_RE = re.compile(r"^img(\d+\.\d+\.\d+)-(x86-64|multi)-appsub$")
+RELEASE_TAG_ARCH = {"x86-64": "x86_64", "multi": "multi"}  # image-set arch -> release tag suffix
 EXTRACT_TIMEOUT = 300  # seconds; a cold extraction takes about 20 s
 
 
@@ -82,9 +83,9 @@ def release_image_for(image_set: str) -> str:
     m = IMAGE_SET_RE.match(image_set)
     if not m:
         raise ReleaseError(
-            f"cannot derive a release image from image set {image_set!r} (expected img<x.y.z>-x86-64-appsub); "
+            f"cannot derive a release image from image set {image_set!r} (expected img<x.y.z>-x86-64-appsub or img<x.y.z>-multi-appsub); "
             "pass --release-image PULLSPEC, or --skip-release-check to scaffold without verification")
-    return f"{RELEASE_REPOSITORY}:{m.group(1)}-x86_64"
+    return f"{RELEASE_REPOSITORY}:{m.group(1)}-{RELEASE_TAG_ARCH[m.group(2)]}"
 
 
 def extract_credentials_requests(image: str, install_config_yaml: str, cloud: str,
