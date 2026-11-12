@@ -24,7 +24,7 @@ from scaffold.providers.base import (
 from scaffold.release import ReleaseError, load_credentials_requests
 
 FIXTURES = Path(__file__).parent.parent / "fixtures" / "credentialsrequests" / "aws-4.22"
-RELEASE_IMAGE = "quay.io/openshift-release-dev/ocp-release:4.21.13-x86_64"
+RELEASE_IMAGE = "quay.io/openshift-release-dev/ocp-release:4.22.22-multi"  # derived from the default --image-set
 
 
 @pytest.fixture(autouse=True)
@@ -749,7 +749,7 @@ def test_skip_release_check(tmp_path, caplog, release_from_fixtures):
     caplog.set_level(logging.INFO, logger="scaffold")
     assert main(_aws_args(tmp_path, "rc4", "--skip-release-check")) == 0
     assert ("Skipping release check (--skip-release-check): the scoped policies were not verified against "
-            "img4.21.13-x86-64-appsub.") in caplog.text
+            "img4.22.22-multi-appsub.") in caplog.text
     release_from_fixtures.assert_not_called()
 
 

@@ -96,7 +96,7 @@ Run `fleet-scaffold-cluster CLOUD --help` for the full flag list of a cloud.
 | `--worker-type`            | cloud-specific               | Instance type for worker nodes                               |
 | `--control-plane-replicas` | topology-specific            | `3` (standard, compact) or `1` (sno)                         |
 | `--worker-replicas`        | topology-specific            | `3` (standard) or `0` (compact, sno; must stay `0`, they have no worker MachinePool) |
-| `--image-set`              | `img4.21.13-x86-64-appsub`   | OpenShift ClusterImageSet name                               |
+| `--image-set`              | `img4.22.22-multi-appsub`    | OpenShift ClusterImageSet name                               |
 | `--zones`                  | cloud-specific               | Comma-separated zone list                                    |
 | `--install-attempts-limit` | `1`                          | Hive install attempts before the ClusterDeployment fails; failed installs need a human retrigger |
 | `--htpasswd-provider-name` | *(none)*                     | Display name for the htpasswd identity provider              |
@@ -300,6 +300,7 @@ The scaffold records no AMI ID. The policy allows launches from any image and sn
 - `ec2:TerminateInstances` is scoped by ownership tag only. The peer-pods credential can terminate the nodes of its own cluster, which carry the same tag. It cannot terminate another cluster's instances.
 - A cluster-admin can tag its own cluster's snapshots with `openshiftpartnerlabs.com/podvm-image=true`. Other coco clusters can then launch instances from those snapshots.
 - The [release check](#release-check) does not cover the peer-pods policy.
+- The OpenShift sandboxed containers 1.13 documentation lists AWS peer pods as generally available from OpenShift 4.21.24 and 4.22.11 (read on 2026-11-12). The default `--image-set` meets the 4.22 minimum. The scaffold does not check a custom `--image-set` against these versions.
 - Red Hat's support status for confidential containers on AWS is not confirmed (checked on 2026-11-12).
 
 ### Azure

@@ -66,7 +66,7 @@ def _common_parser() -> argparse.ArgumentParser:
     common.add_argument("--control-plane-replicas", type=int, default=None, help="Default: 3, or 1 for sno")
     common.add_argument("--worker-replicas", type=int, default=None, help="Default: 3, or 0 for compact/sno")
 
-    common.add_argument("--image-set", default="img4.21.13-x86-64-appsub", help="ClusterImageSet name (default: %(default)s)")
+    common.add_argument("--image-set", default="img4.22.22-multi-appsub", help="ClusterImageSet name (default: %(default)s)")
     common.add_argument(
         "--install-attempts-limit",
         type=int,

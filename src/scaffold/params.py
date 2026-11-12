@@ -30,7 +30,7 @@ class ClusterParams:
     worker_type: str | None = None
     control_plane_replicas: int | None = None
     worker_replicas: int | None = None
-    image_set: str = "img4.21.13-x86-64-appsub"
+    image_set: str = "img4.22.22-multi-appsub"
     zones: list[str] | None = None
     htpasswd_provider_name: str | None = None
     ai_accelerator: str | None = None
