@@ -141,7 +141,7 @@ Partners get cluster-admin, and all clusters share one AWS account. So no creden
 
 - **`credentialsMode: Manual`**: the installer key is never copied to the spoke (no `kube-system/aws-creds`).
 - **Ownership tag** `openshiftpartnerlabs.com/cluster=<name>`, set via install-config `userTags` and `propagateUserTags`, so the installer and the operators tag what they create.
-- **One IAM user per OpenShift operator** (machine-api, image-registry, ingress, ebs-csi, cloud-network-config-controller, cloud-credential-operator read-only). Each policy is derived from the OCP 4.20/4.21 CredentialsRequests and limited to the cluster:
+- **One IAM user per OpenShift operator** (machine-api, image-registry, ingress, ebs-csi, cloud-network-config-controller, cloud-credential-operator read-only). Each policy is derived from the OCP 4.20 to 4.22 CredentialsRequests and limited to the cluster:
   - instances by the cluster's exact instance profiles `<infraID>-{master,worker}-profile`;
   - volumes, snapshots, security groups and load balancers by the ownership tag (settable only at create time);
   - instance launches only from snapshots owned by another account (the RHCOS AMI's, owned by Red Hat), never from this account's snapshots, which hold other clusters' PV and VM data;
@@ -172,7 +172,7 @@ IAM patterns match the infra ID as `<prefix>-?????`: `<prefix>` is the name cut 
 
 `ccoctl` is the OpenShift tool that creates the operator IAM roles for an AWS STS cluster from the release's CredentialsRequests. The scaffold renders its own policies and has Crossplane create the IAM resources, for these reasons:
 
-- **The default `ccoctl` policies are account-wide.** `ccoctl aws create-iam-roles` copies each CredentialsRequest statement into the role policy. Every statement in the 4.21 requests has `resource: '*'`. One cluster's machine-api credential could then terminate another cluster's instances, which breaks the isolation rule above.
+- **The default `ccoctl` policies are account-wide.** `ccoctl aws create-iam-roles` copies each CredentialsRequest statement into the role policy. Every statement in the 4.22 requests has `resource: '*'`. One cluster's machine-api credential could then terminate another cluster's instances, which breaks the isolation rule above.
 - **Narrowed CredentialsRequests would give the same isolation at a higher cost.** `ccoctl` passes a narrowed `resource` and a `policyCondition` through to the role policy, so it could deliver the policies in `aws_policies.py`. The permissions would be identical. A statement accepts one `resource` string, so each multi-resource statement would have to be split. IAM creation would move from Crossplane reconciliation to a pipeline step that holds IAM and S3 write credentials.
 - **STS changes the credential type and leaves the permissions unchanged.** The roles `ccoctl` creates are assumed with a service account token (`sts:AssumeRoleWithWebIdentity`). A cluster-admin can request a token for any operator service account, so a partner reaches the same policies as with the per-operator IAM users.
 - **STS adds a per-cluster OIDC issuer to protect.** Its key document must be publicly readable. A principal that can replace the document can assume every operator role of that cluster. Teardown must delete the IAM OIDC provider and the roles together with the issuer bucket.
@@ -217,6 +217,7 @@ This identity can create IAM policies and roles, which is account-admin-equivale
 - **Account-wide reads.** The stock CredentialsRequests need these on `*`, and EC2 `Describe*` calls cannot be scoped by resource. So every spoke can list every cluster's instances, volumes, snapshots, security groups, load balancers and hosted zones, plus every tagged resource in the account. The relevant actions: `ec2:Describe*`, `elasticloadbalancing:Describe*`, `route53:ListHostedZones`, `tag:GetResources`. Spokes can read this inventory but not change it.
 - **The snapshot check fails closed.** It requires the `ec2:Owner` key. If EC2 stops sending it, or install-config points at an AMI copied into this account, machine-api launches fail with `UnauthorizedOperation`.
 - Between install and step 3, partner `LoadBalancer` Services and egress IPs are denied. Partners don't have access yet in that window.
+- **No Dedicated Hosts.** From OCP 4.22 the machine-api CredentialsRequest asks for `ec2:AllocateHosts` and `ec2:ReleaseHosts`. The machine-api policy grants neither (`INTENTIONALLY_DROPPED` in `aws_policies.py`). The scaffold renders no host placement; a MachineSet edited on the spoke to allocate a Dedicated Host fails with `UnauthorizedOperation`.
 - Custom operator policies are outside Red Hat's tested configuration. The [release check](#release-check) gates every scaffold run, so a release that changes a CredentialsRequest fails the scaffold instead of installing a cluster whose operator lacks an action. On every OCP minor upgrade:
   1. scaffold a cluster with the new `--image-set` and read the gap lines;
   2. update `aws_policies.py` until the check passes;
@@ -436,7 +437,7 @@ For AWS clusters with scoped credentials (the default) the scaffold verifies the
 2. `oc adm release extract --credentials-requests --cloud=aws --included --install-config=<rendered install-config>` extracts the CredentialsRequests the installer would apply for this cluster. The repository is public; no pull secret is used. This takes about 20 seconds; the log announces it with `-> release check:` followed by `-> -> extracting CredentialsRequests from <image>` and `-> -> (oc adm release extract, up to 300s)`, and prints nothing else until `oc` returns.
 3. The requests are compared with `COMPONENTS` and the rendered policies: every AWS CredentialsRequest needs a scoped policy, every `COMPONENTS` entry must exist in the release, each operator's target Secret (namespace and name) must match, and every requested action must be granted (IAM wildcards in the policy match; `INTENTIONALLY_DROPPED` lists deliberate omissions).
 
-On success the log shows `-> -> Release check: <n> CredentialsRequests from <source> covered by the scoped policies.` followed by `-> -> Cluster '<name>' scaffolded successfully`. On any difference the command exits `1` with one line per gap, for example `machine-api lacks ec2:AllocateHosts, ec2:ReleaseHosts`. The overlay has already been written at that point; fix `aws_policies.py`, refresh the fixtures (see [Limits and residuals](#aws-credentials-cluster-scoped-default)) and regenerate the overlay with `--force`.
+On success the log shows `-> -> Release check: <n> CredentialsRequests from <source> covered by the scoped policies.` followed by `-> -> Cluster '<name>' scaffolded successfully`. On any difference the command exits `1` with one line per gap, in the form `machine-api lacks <action>, <action>`. The overlay has already been written at that point; fix `aws_policies.py`, refresh the fixtures (see [Limits and residuals](#aws-credentials-cluster-scoped-default)) and regenerate the overlay with `--force`.
 
 Flags:
 - `--release-image PULLSPEC`: check against this release instead of the one derived from `--image-set`.
@@ -463,7 +464,7 @@ pip install pytest
 pytest tests/ -v
 ```
 
-The tests never run `oc`: the CLI tests patch the extraction and compare against `tests/fixtures/credentialsrequests/aws-4.21`. To scaffold without `oc` or network access, pass `--credentials-requests-dir tests/fixtures/credentialsrequests/aws-4.21`.
+The tests never run `oc`: the CLI tests patch the extraction and compare against `tests/fixtures/credentialsrequests/aws-4.22`. To scaffold without `oc` or network access, pass `--credentials-requests-dir tests/fixtures/credentialsrequests/aws-4.22`.
 
 ### Linting
 

@@ -18,13 +18,13 @@ from scaffold.release import (
     release_image_for,
 )
 
-FIXTURES = pathlib.Path(__file__).parent.parent / "fixtures" / "credentialsrequests" / "aws-4.21"
+FIXTURES = pathlib.Path(__file__).parent.parent / "fixtures" / "credentialsrequests" / "aws-4.22"
 INSTALL_CONFIG = "apiVersion: v1\nbaseDomain: example.com\nmetadata:\n  name: demo\n"
 IMAGE = f"{RELEASE_REPOSITORY}:4.21.13-x86_64"
 
 
 def _copy_fixtures(argv, **_kwargs):
-    """Stand-in for oc: write the vendored 4.21 manifests where --to points."""
+    """Stand-in for oc: write the vendored 4.22 manifests where --to points."""
     to = next(a for a in argv if a.startswith("--to=")).removeprefix("--to=")
     os.makedirs(to)
     for f in FIXTURES.glob("*.yaml"):

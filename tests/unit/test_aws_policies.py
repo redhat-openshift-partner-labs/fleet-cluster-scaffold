@@ -12,7 +12,7 @@ from scaffold.release import CredentialsRequest, load_credentials_requests
 
 NAME, REGION, DOMAIN = "10f25620-vscopeocpv", "us-east-2", "openshiftpartnerlabs.com"
 PREFIX = pol.infra_prefix(NAME)
-FIXTURES = pathlib.Path(__file__).parent.parent / "fixtures" / "credentialsrequests" / "aws-4.21"
+FIXTURES = pathlib.Path(__file__).parent.parent / "fixtures" / "credentialsrequests" / "aws-4.22"
 REQUESTS = load_credentials_requests(FIXTURES)
 BY_NAME = {r.name: r for r in REQUESTS}
 
@@ -113,9 +113,10 @@ class TestCoverageGaps:
             "the scaffold delivers openshift-ingress-operator/cloud-credentials"]
 
     def test_missing_actions_are_reported_sorted(self):
-        """OCP 4.22 adds these two to machine-api; the scoped policy does not grant them."""
-        actions = (*BY_NAME[self.MACHINE_API].actions, "ec2:ReleaseHosts", "ec2:AllocateHosts")
-        assert _gaps(self._with(self.MACHINE_API, actions=actions)) == ["machine-api lacks ec2:AllocateHosts, ec2:ReleaseHosts"]
+        """Two actions no vendored release requests; the scoped policy does not grant them."""
+        actions = (*BY_NAME[self.MACHINE_API].actions, "ec2:CreateCapacityReservation", "ec2:CancelCapacityReservation")
+        assert _gaps(self._with(self.MACHINE_API, actions=actions)) == [
+            "machine-api lacks ec2:CancelCapacityReservation, ec2:CreateCapacityReservation"]
 
     def test_wildcard_grant_covers_action(self):
         actions = (*BY_NAME["aws-ebs-csi-driver-operator"].actions, "kms:ReEncryptFrom")  # granted as kms:ReEncrypt*
@@ -125,6 +126,14 @@ class TestCoverageGaps:
         assert "sts:AssumeRole" in BY_NAME["openshift-ingress"].actions
         assert "sts:AssumeRole" in pol.INTENTIONALLY_DROPPED["openshift-ingress"]
         assert _gaps(REQUESTS) == []
+
+    def test_dedicated_host_actions_are_requested_dropped_and_not_granted(self):
+        """OCP 4.22 adds these two to machine-api; the scoped policy leaves Dedicated Hosts out."""
+        hosts = {"ec2:AllocateHosts", "ec2:ReleaseHosts"}
+        assert hosts <= set(BY_NAME[self.MACHINE_API].actions)
+        assert pol.INTENTIONALLY_DROPPED[self.MACHINE_API] == hosts
+        granted = _allowed_actions(pol.component_policy("machine-api", NAME, REGION, DOMAIN))
+        assert not any(fnmatch.fnmatchcase(a, g) for a in hosts for g in granted)
 
     def test_other_providers_are_ignored(self):
         azure = CredentialsRequest("openshift-ingress-azure", "AzureProviderSpec", "openshift-ingress-operator",

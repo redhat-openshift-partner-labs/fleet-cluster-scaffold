@@ -19,7 +19,7 @@ kubernetes.io/cluster/<infraID>=owned, which machine-api, EBS CSI and the cloud-
 always apply at create time (so partner LoadBalancer Services need no annotation), and limits
 egress-IP ENI changes to the cluster VPC.
 
-Operator actions mirror the OCP 4.20/4.21 AWS CredentialsRequests
+Operator actions mirror the OCP 4.20 to 4.22 AWS CredentialsRequests, less INTENTIONALLY_DROPPED
 (`oc adm release extract --credentials-requests --cloud=aws --included`). coverage_gaps() reports
 every difference between a release's CredentialsRequests and these policies; run it on every OCP
 minor upgrade.
@@ -328,6 +328,8 @@ def component_policy(key: str, name: str, region: str, base_domain: str) -> dict
 # CredentialsRequest actions the scoped policies deliberately omit, by request name
 INTENTIONALLY_DROPPED: dict[str, frozenset[str]] = {
     "openshift-ingress": frozenset({"sts:AssumeRole"}),  # shared-VPC hostedZoneRole only; fleet does not use it
+    # Dedicated Hosts (added in OCP 4.22); the scaffold renders no host placement
+    "openshift-machine-api-aws": frozenset({"ec2:AllocateHosts", "ec2:ReleaseHosts"}),
 }
 
 AWS_PROVIDER_KIND = "AWSProviderSpec"

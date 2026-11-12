@@ -23,13 +23,13 @@ from scaffold.providers.base import (
 )
 from scaffold.release import ReleaseError, load_credentials_requests
 
-FIXTURES = Path(__file__).parent.parent / "fixtures" / "credentialsrequests" / "aws-4.21"
+FIXTURES = Path(__file__).parent.parent / "fixtures" / "credentialsrequests" / "aws-4.22"
 RELEASE_IMAGE = "quay.io/openshift-release-dev/ocp-release:4.21.13-x86_64"
 
 
 @pytest.fixture(autouse=True)
 def release_from_fixtures():
-    """Every CLI run compares the scoped policies against the vendored 4.21 CredentialsRequests; no oc, no network."""
+    """Every CLI run compares the scoped policies against the vendored 4.22 CredentialsRequests; no oc, no network."""
     with mock.patch("scaffold.release.extract_credentials_requests",
                     return_value=load_credentials_requests(FIXTURES)) as extract:
         yield extract
@@ -774,10 +774,10 @@ def test_operator_without_scoped_policy_fails(tmp_path, caplog):
 def test_action_missing_from_scoped_policy_fails(tmp_path, caplog):
     crs = _fixtures_copy(tmp_path)
     doc = _load_one(crs / MACHINE_API_FIXTURE)
-    doc["spec"]["providerSpec"]["statementEntries"][0]["action"].append("ec2:AllocateHosts")
+    doc["spec"]["providerSpec"]["statementEntries"][0]["action"].append("ec2:CreateCapacityReservation")
     (crs / MACHINE_API_FIXTURE).write_text(yaml.safe_dump(doc))
     assert main(_aws_args(tmp_path, "rc7", "--credentials-requests-dir", str(crs))) == 1
-    assert "machine-api lacks ec2:AllocateHosts" in caplog.text
+    assert "machine-api lacks ec2:CreateCapacityReservation" in caplog.text
 
 
 def test_operator_absent_from_release_fails(tmp_path, caplog):
