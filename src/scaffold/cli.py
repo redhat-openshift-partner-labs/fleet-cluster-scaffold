@@ -48,7 +48,9 @@ def _common_parser() -> argparse.ArgumentParser:
 
     common.add_argument("--name", required=True, help="Cluster name (DNS-1123 label)")
     common.add_argument("--region", required=True, help="Cloud region (e.g. us-east-1, eastus)")
-    common.add_argument("--tier", required=True, choices=["base", "virt", "ai"], help="Tier")
+    # Every tier some cloud supports, in first-seen order; main() rejects a tier the chosen cloud lacks
+    tiers = list(dict.fromkeys(t for p in PROVIDERS.values() for t in p.tiers))
+    common.add_argument("--tier", required=True, choices=tiers, help="Tier")
     common.add_argument(
         "--topology",
         default="standard",
@@ -249,6 +251,10 @@ def main(args=None) -> int:  # pylint: disable=too-many-return-statements
             raise ValueError(
                 f"--worker-replicas {params.worker_replicas} needs a worker MachinePool, which the "
                 f"{params.topology} topology does not have. Use --topology standard."
+            )
+        if params.tier not in provider.tiers:
+            raise ValueError(
+                f"--tier {params.tier} is not supported on {parsed.cloud}; supported tiers: {', '.join(provider.tiers)}."
             )
         provider.validate(params)
         validate_profile(params.profile, parsed.cluster_templates_dir)

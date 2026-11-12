@@ -24,6 +24,9 @@ ANNOTATION_TARGET_NAMESPACE = "openshiftpartnerlabs.com/target-namespace"
 ANNOTATION_TARGET_SECRET = "openshiftpartnerlabs.com/target-secret"
 ANNOTATION_DELIVERY = "openshiftpartnerlabs.com/delivery"
 
+# Tiers every cloud supports; a provider with more extends this tuple in its own `tiers`
+TIERS: tuple[str, ...] = ("base", "virt", "ai")
+
 
 def dump(obj: Any) -> str:
     return yaml.dump(obj, default_flow_style=False, sort_keys=False)
@@ -55,6 +58,7 @@ class Provider:
     implemented: bool = True
     control_plane_type: str = ""
     worker_type: str = ""
+    tiers: tuple[str, ...] = TIERS  # --tier values this cloud accepts
 
     def add_arguments(self, parser: argparse.ArgumentParser) -> None:
         """Register cloud-specific CLI flags."""

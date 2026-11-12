@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 import shutil
 from pathlib import Path
 import subprocess
@@ -9,11 +10,13 @@ import pytest
 import yaml
 
 from scaffold.cli import main
+from scaffold.providers import PROVIDERS
 from scaffold.providers import aws_policies as pol
 from scaffold.providers.base import (
     ANNOTATION_CREDENTIALS_REQUEST,
     ANNOTATION_TARGET_NAMESPACE,
     ANNOTATION_TARGET_SECRET,
+    TIERS,
 )
 from scaffold.release import ReleaseError, load_credentials_requests
 
@@ -567,6 +570,30 @@ def test_azure_flags_forwarded(tmp_path):
     assert ops["/spec/platform/azure/cloudName"] == "AzureUSGovernmentCloud"
     mp = yaml.safe_load((tmp_path / "az2" / "hive" / "patches" / "machinepool-worker.yaml").read_text())
     assert {op["path"]: op["value"] for op in mp}["/spec/platform/azure/type"] == "Standard_D16s_v5"
+
+
+# ======== Tier support tests ========
+
+
+def test_help_lists_common_tiers(capsys):
+    with pytest.raises(SystemExit) as exc:
+        main(["aws", "--help"])
+    assert exc.value.code == 0
+    choices = re.search(r"--tier \{([^}]*)\}", capsys.readouterr().out).group(1).split(",")
+    assert choices[:len(TIERS)] == ["base", "virt", "ai"]
+
+
+def test_tier_not_supported_on_the_cloud_is_rejected(tmp_path, monkeypatch, caplog):
+    monkeypatch.setattr(PROVIDERS["azure"], "tiers", ("base",))
+    assert main(_azure_args(tmp_path, "az-tier", "--tier", "ai")) == 1
+    assert "--tier ai is not supported on azure; supported tiers: base." in caplog.text
+    assert not (tmp_path / "az-tier").exists()
+
+
+def test_tier_restriction_is_per_cloud(tmp_path, monkeypatch):
+    monkeypatch.setattr(PROVIDERS["azure"], "tiers", ("base",))
+    assert main(_aws_args(tmp_path, "aws-tier", "--tier", "ai")) == 0
+    assert (tmp_path / "aws-tier").is_dir()
 
 
 if __name__ == "__main__":
