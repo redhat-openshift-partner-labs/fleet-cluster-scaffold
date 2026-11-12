@@ -39,12 +39,22 @@ def _allowed_actions(doc: dict) -> set[str]:
     return {a for st in _statements(doc) if st["Effect"] == "Allow" for a in _as_list(st["Action"])}
 
 
+def _tier_components() -> tuple[pol.Component, ...]:
+    return tuple(c for components in pol.TIER_COMPONENTS.values() for c in components)
+
+
 def _spoke_policies() -> dict[str, dict]:
-    """Every policy whose credential can reach the spoke (operator users and node roles)."""
-    docs = {c.key: pol.component_policy(c.key, NAME, REGION, DOMAIN) for c in pol.COMPONENTS}
+    """Every policy whose credential can reach the spoke (operator users, tier credentials and node roles)."""
+    docs = {c.key: pol.component_policy(c.key, NAME, REGION, DOMAIN) for c in (*pol.COMPONENTS, *_tier_components())}
     docs["master-role"] = pol.master_role_policy(NAME, REGION, DOMAIN)
     docs["worker-role"] = pol.worker_role_policy()
     return docs
+
+
+def _release_and_node_policies() -> dict[str, dict]:
+    """Release operators and node roles; their instances carry a cluster instance profile (pod VMs carry none)."""
+    tier_keys = {c.key for c in _tier_components()}
+    return {label: doc for label, doc in _spoke_policies().items() if label not in tier_keys}
 
 
 class TestInfraPrefix:
@@ -170,7 +180,7 @@ class TestSpokeInvariants:
     def test_instance_mutation_requires_cluster_profile(self):
         profile = {"ArnLike": {"ec2:InstanceProfile": [f"arn:aws:iam::*:instance-profile/{PREFIX}-?????-master-profile",
                                                         f"arn:aws:iam::*:instance-profile/{PREFIX}-?????-worker-profile"]}}
-        for label, doc in _spoke_policies().items():
+        for label, doc in _release_and_node_policies().items():
             for st in _statements(doc):
                 if st["Resource"] == pol._ec2("instance") and set(_as_list(st["Action"])) & {
                         "ec2:TerminateInstances", "ec2:ModifyInstanceAttribute", "ec2:AttachVolume", "ec2:RunInstances"}:
@@ -187,7 +197,7 @@ class TestSpokeInvariants:
     def test_fits_policy_size_limit_at_max_name_length(self):
         """The cluster name repeats in tag conditions, so the longest allowed name is the worst case."""
         name = "a" * (pol.IAM_NAME_MAX - pol.MAX_NAME_SUFFIX)
-        for c in pol.COMPONENTS:
+        for c in pol.components_for(pol.TIER_COCO):
             assert len(pol.render(pol.component_policy(c.key, name, "ap-southeast-1", DOMAIN))) <= pol.MANAGED_POLICY_MAX, c.key
         assert len(pol.render(pol.master_role_policy(name, "ap-southeast-1", DOMAIN))) <= pol.INLINE_ROLE_POLICY_MAX
 
@@ -282,6 +292,84 @@ class TestComponents:
         assert pol.MAX_NAME_SUFFIX == len("-image-registry")
 
 
+class TestTierComponents:
+    def test_base_tier_has_the_release_operators_only(self):
+        assert pol.components_for("base") == pol.COMPONENTS
+
+    def test_coco_tier_adds_peer_pods(self):
+        assert pol.components_for(pol.TIER_COCO) == pol.COMPONENTS + (pol.PEER_PODS,)
+
+    def test_keys_are_unique(self):
+        keys = [c.key for c in pol.components_for(pol.TIER_COCO)]
+        assert len(keys) == len(set(keys))
+
+    def test_iam_name_budget_covers_tier_components(self):
+        assert pol.MAX_NAME_SUFFIX == len("-image-registry")
+        assert all(len(f"-{c.key}") <= pol.MAX_NAME_SUFFIX for c in _tier_components())
+
+    def test_peer_pods_is_not_reported_absent_from_the_release(self):
+        """The release payload has no CredentialsRequest for peer-pods."""
+        assert pol.PEER_PODS.credentials_request not in BY_NAME
+        assert _gaps(REQUESTS) == []
+
+    def test_cco_iam_ro_reads_the_six_operator_users_only(self):
+        (st,) = _statements(pol.component_policy("cco-iam-ro", NAME, REGION, DOMAIN))
+        assert len(st["Resource"]) == 6
+        assert f"arn:aws:iam::*:user/{NAME}-{pol.PEER_PODS.key}" not in st["Resource"]
+
+
+class TestPeerPodsPolicy:
+    DOC = pol.component_policy(pol.PEER_PODS.key, NAME, REGION, DOMAIN)
+    REQUEST_OWNED = [{"StringEquals": {f"aws:RequestTag/{pol.TAG_KEY}": NAME}},
+                     {"StringEquals": {f"aws:RequestTag/{pol.CLUSTER_TAG}": "owned"}}]
+    RESOURCE_OWNED = [{"StringEquals": {f"ec2:ResourceTag/{pol.TAG_KEY}": NAME}},
+                      {"StringEquals": {f"ec2:ResourceTag/{pol.CLUSTER_TAG}": "owned"}}]
+
+    def _conditions(self, action: str, resource: str) -> list[dict | None]:
+        """Conditions of every statement that allows the action on the resource type."""
+        return [st.get("Condition") for st in _statements(self.DOC)
+                if action in st["Action"] and pol._ec2(resource) in _as_list(st["Resource"])]
+
+    def test_allowed_actions(self):
+        assert _allowed_actions(self.DOC) == {
+            "ec2:DescribeAddresses", "ec2:DescribeImages", "ec2:DescribeInstances", "ec2:DescribeInstanceTypes",
+            "ec2:RunInstances", "ec2:TerminateInstances", "ec2:CreateTags"}
+
+    def test_no_iam_action(self):
+        assert not [a for a in _allowed_actions(self.DOC) if a.startswith("iam:")]
+
+    def test_launched_instance_must_carry_an_ownership_tag(self):
+        assert self._conditions("ec2:RunInstances", "instance") == self.REQUEST_OWNED
+
+    @pytest.mark.parametrize("resource", ["subnet", "security-group"])
+    def test_launch_only_into_owned_network(self, resource):
+        assert self._conditions("ec2:RunInstances", resource) == self.RESOURCE_OWNED
+
+    @pytest.mark.parametrize("resource", ["image", "snapshot"])
+    def test_launch_only_from_pod_vm_image(self, resource):
+        assert self._conditions("ec2:RunInstances", resource) == [
+            {"StringEquals": {f"ec2:ResourceTag/{pol.PODVM_IMAGE_TAG}": "true"}}]
+
+    def test_pod_vm_image_tag_is_not_the_ownership_tag(self):
+        """An ownership condition is found by TAG_KEY; the image tag must not read as one."""
+        assert pol.TAG_KEY not in pol.PODVM_IMAGE_TAG
+
+    def test_terminate_only_owned_instances(self):
+        assert self._conditions("ec2:TerminateInstances", "instance") == self.RESOURCE_OWNED
+
+    def test_tags_only_on_instance_at_launch(self):
+        (st,) = [s for s in _statements(self.DOC) if "ec2:CreateTags" in s["Action"]]
+        assert st["Resource"] == pol._ec2("instance")
+        assert st["Condition"] == {"StringEquals": {"ec2:CreateAction": ["RunInstances"]}}
+
+    def test_ownership_conditions_match_the_exact_cluster_name(self):
+        owned = [st["Condition"] for st in _statements(self.DOC) if pol.TAG_KEY in json.dumps(st.get("Condition", {}))]
+        assert len(owned) == 3  # instance request tag, network resource tag, terminate resource tag
+        for cond in owned:
+            assert list(cond) == ["StringEquals"]
+            assert list(cond["StringEquals"].values()) == [NAME]
+
+
 class TestCrossClusterIsolation:
     """No policy of one cluster may match the resources of a cluster whose name extends it.
 
@@ -309,7 +397,7 @@ class TestCrossClusterIsolation:
 
     @classmethod
     def _policies(cls) -> dict[str, dict]:
-        docs = {c.key: pol.component_policy(c.key, cls.OWN, REGION, DOMAIN) for c in pol.COMPONENTS}
+        docs = {c.key: pol.component_policy(c.key, cls.OWN, REGION, DOMAIN) for c in pol.components_for(pol.TIER_COCO)}
         docs["master-role"] = pol.master_role_policy(cls.OWN, REGION, DOMAIN)
         docs["worker-role"] = pol.worker_role_policy()
         docs["installer"] = pol.installer_policy(cls.OWN)

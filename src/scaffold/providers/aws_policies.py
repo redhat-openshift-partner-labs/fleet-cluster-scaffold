@@ -23,6 +23,12 @@ Operator actions mirror the OCP 4.20/4.21 AWS CredentialsRequests
 (`oc adm release extract --credentials-requests --cloud=aws --included`). coverage_gaps() reports
 every difference between a release's CredentialsRequests and these policies; run it on every OCP
 minor upgrade.
+
+The coco tier adds the peer-pods credential, which cloud-api-adaptor uses to launch pod VMs. Pod VMs
+carry no instance profile, so they are owned by tag (the two ownership keys above). Launches are
+limited to images and snapshots tagged PODVM_IMAGE_TAG=true. The actions mirror the calls of
+cloud-api-adaptor's AWS provider; the sandboxed-containers operator's CredentialsRequest (ec2:*,
+pod VM image build) is not granted and is outside coverage_gaps().
 """
 
 from __future__ import annotations
@@ -48,6 +54,11 @@ CLUSTER_TAG = f"kubernetes.io/cluster/{INFRA_ID_PLACEHOLDER}"
 # installer: maxLen 27 - (randomLen 5 + 1); pkg/asset/installconfig/clusterid.go
 _INFRA_BASE_MAX = 21
 
+TIER_COCO = "coco"
+DELIVERY_POST_PROVISION = "post-provision"
+# On the pod VM AMI and its backing snapshots (value "true"); set by fleet, never by a spoke credential on an image
+PODVM_IMAGE_TAG = "openshiftpartnerlabs.com/podvm-image"
+
 
 @dataclass(frozen=True)
 class Component:
@@ -57,6 +68,7 @@ class Component:
     credentials_request: str
     namespace: str
     secret: str
+    delivery: str | None = None  # None: Hive install manifests; DELIVERY_POST_PROVISION: fleet post-provision
 
 
 COMPONENTS: tuple[Component, ...] = (
@@ -68,8 +80,20 @@ COMPONENTS: tuple[Component, ...] = (
     Component("ebs-csi", "aws-ebs-csi-driver-operator", "openshift-cluster-csi-drivers", "ebs-cloud-credentials"),
 )
 
+PEER_PODS = Component("peer-pods", "openshift-sandboxed-containers-aws",
+                      "openshift-sandboxed-containers-operator", "peer-pods-secret", DELIVERY_POST_PROVISION)
+
+# Credentials beyond the release operators, by tier. Not part of coverage_gaps(): no release CredentialsRequest.
+TIER_COMPONENTS: dict[str, tuple[Component, ...]] = {TIER_COCO: (PEER_PODS,)}
+
+
+def components_for(tier: str) -> tuple[Component, ...]:
+    """The release operators plus the tier's own credentials."""
+    return COMPONENTS + TIER_COMPONENTS.get(tier, ())
+
+
 # Longest IAM name suffix appended to the cluster name; IAM user/role names are capped at 64.
-MAX_NAME_SUFFIX = max(len(f"-{c.key}") for c in COMPONENTS)
+MAX_NAME_SUFFIX = max(len(f"-{c.key}") for c in (*COMPONENTS, *(c for cs in TIER_COMPONENTS.values() for c in cs)))
 IAM_NAME_MAX = 64
 MANAGED_POLICY_MAX = 6144  # operator users (managed policies)
 INLINE_ROLE_POLICY_MAX = 10240  # node roles (inline policies)
@@ -270,6 +294,20 @@ def _volume_statements(s: _Scope, sid: str) -> list[dict[str, Any]]:
     ]
 
 
+def _peer_pods(s: _Scope) -> dict:
+    # Pod VMs carry no instance profile: ownership is by tag, and the image is limited by PODVM_IMAGE_TAG
+    podvm_image = {"StringEquals": {f"ec2:ResourceTag/{PODVM_IMAGE_TAG}": "true"}}
+    return _doc(
+        _stmt("Read", ["ec2:DescribeAddresses", "ec2:DescribeImages", "ec2:DescribeInstances", "ec2:DescribeInstanceTypes"]),
+        *_owned("RunOwnedInstance", ["ec2:RunInstances"], _ec2("instance"), s.request_tag_any),
+        *_owned("RunInOwnedNetwork", ["ec2:RunInstances"], [_ec2("subnet"), _ec2("security-group")], s.ec2_owned_any),
+        _stmt("RunSupporting", ["ec2:RunInstances"], [_ec2("volume"), _ec2("network-interface")]),
+        _stmt("RunFromPodVMImage", ["ec2:RunInstances"], [_ec2("image"), _ec2("snapshot")], podvm_image),
+        *_owned("TerminateOwned", ["ec2:TerminateInstances"], _ec2("instance"), s.ec2_owned_any),
+        _stmt("TagOnLaunch", ["ec2:CreateTags"], _ec2("instance"), s.ec2_create_action("RunInstances")),
+    )
+
+
 _COMPONENT_POLICIES = {
     "machine-api": _machine_api,
     "cco-iam-ro": _cco_iam_ro,
@@ -277,6 +315,7 @@ _COMPONENT_POLICIES = {
     "ingress": _ingress,
     "cncc": _cncc,
     "ebs-csi": _ebs_csi,
+    PEER_PODS.key: _peer_pods,
 }
 
 
