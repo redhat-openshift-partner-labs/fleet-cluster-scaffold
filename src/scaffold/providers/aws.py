@@ -21,6 +21,7 @@ if TYPE_CHECKING:  # type-only: params imports providers at runtime
 from scaffold.providers import aws_policies as pol
 from scaffold.providers.base import (
     ANNOTATION_CREDENTIALS_REQUEST,
+    ANNOTATION_DELIVERY,
     ANNOTATION_TARGET_NAMESPACE,
     ANNOTATION_TARGET_SECRET,
     Provider,
@@ -134,7 +135,10 @@ class AWSProvider(Provider):
         return ops
 
     def crossplane_base_dir(self, params: ClusterParams) -> str:
-        return "crossplane-scoped" if self.scoped(params) else "crossplane"
+        if not self.scoped(params):
+            return "crossplane"
+        # A tier with its own credentials has a base that adds them to crossplane-scoped
+        return f"crossplane-scoped-{params.tier}" if params.tier in pol.TIER_COMPONENTS else "crossplane-scoped"
 
     def metadata(self, params: ClusterParams) -> dict[str, str]:
         return {**super().metadata(params), "aws-credentials-mode": SCOPED if self.scoped(params) else LEGACY}
@@ -223,19 +227,22 @@ class AWSProvider(Provider):
                     replace("/spec/forProvider/inlinePolicy/0/policy", pol.render(doc)),
                 ])
 
-        for c in pol.COMPONENTS:
+        for c in pol.components_for(params.tier):
             base = f"{n}-{c.key}"
             placeholder = f"cluster-placeholder-{c.key}"
+            annotations = {
+                ANNOTATION_CREDENTIALS_REQUEST: c.credentials_request,
+                ANNOTATION_TARGET_NAMESPACE: c.namespace,
+                ANNOTATION_TARGET_SECRET: c.secret,
+            }
+            if c.delivery:
+                annotations[ANNOTATION_DELIVERY] = c.delivery
             user_set(
                 c.key,
                 (placeholder, f"{placeholder}-policy", f"{placeholder}-attachment", f"{placeholder}-access-key"),
                 (base, f"{base}-policy", f"{base}-attachment", f"{base}-access-key"),
                 pol.component_policy(c.key, n, region, domain),
                 secret=f"{base}-credentials-raw",
-                annotations={
-                    ANNOTATION_CREDENTIALS_REQUEST: c.credentials_request,
-                    ANNOTATION_TARGET_NAMESPACE: c.namespace,
-                    ANNOTATION_TARGET_SECRET: c.secret,
-                },
+                annotations=annotations,
             )
         return entries, files

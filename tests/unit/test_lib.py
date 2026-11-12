@@ -1,4 +1,5 @@
 import os
+import pathlib
 
 import pytest
 import yaml
@@ -17,6 +18,7 @@ from scaffold.lib import (
 from scaffold.providers import aws_policies as pol
 from scaffold.providers.base import (
     ANNOTATION_CREDENTIALS_REQUEST,
+    ANNOTATION_DELIVERY,
     ANNOTATION_TARGET_NAMESPACE,
     ANNOTATION_TARGET_SECRET,
 )
@@ -293,6 +295,88 @@ class TestScopedAccessKeyAnnotations:
         assert _annotation_ops(generate_crossplane_patches(legacy_params), "patches/access-key.yaml") == []
 
 
+# ===================== coco tier: peer-pods credential =====================
+
+
+def _tier_params(tier: str, **overrides) -> ClusterParams:
+    return ClusterParams(name="my-cluster", region="us-east-2", tier=tier, **overrides)
+
+
+def _patch_targets(patches) -> set[tuple[str, str]]:
+    """(kind, placeholder name) of every patch entry in a generated kustomization."""
+    kust = yaml.safe_load(patches["kustomization.yaml"])
+    return {(e["target"]["kind"], e["target"]["name"]) for e in kust["patches"]}
+
+
+class TestCocoCrossplanePatches:
+    """Tier coco adds the peer-pods User, Policy, UserPolicyAttachment and AccessKey to the scoped overlay."""
+
+    KEY = pol.PEER_PODS.key
+    PLACEHOLDER = f"cluster-placeholder-{KEY}"
+
+    def test_adds_the_four_peer_pods_patches(self):
+        coco = generate_crossplane_patches(_tier_params(pol.TIER_COCO))
+        base = generate_crossplane_patches(_tier_params("base"))
+        assert set(coco) - set(base) == {
+            f"patches/{self.KEY}/{f}.yaml" for f in ("user", "policy", "attachment", "access-key")}
+        assert _patch_targets(coco) - _patch_targets(base) == {
+            ("User", self.PLACEHOLDER),
+            ("Policy", f"{self.PLACEHOLDER}-policy"),
+            ("UserPolicyAttachment", f"{self.PLACEHOLDER}-attachment"),
+            ("AccessKey", f"{self.PLACEHOLDER}-access-key"),
+        }
+        # The installer, node-role and operator patches are the base tier's
+        assert all(coco[path] == base[path] for path in base if path != "kustomization.yaml")
+
+    @pytest.mark.parametrize("file,name", [
+        ("user", "my-cluster-peer-pods"),
+        ("policy", "my-cluster-peer-pods-policy"),
+        ("attachment", "my-cluster-peer-pods-attachment"),
+        ("access-key", "my-cluster-peer-pods-access-key"),
+    ])
+    def test_resource_names(self, file, name):
+        ops = yaml.safe_load(generate_crossplane_patches(_tier_params(pol.TIER_COCO))[f"patches/{self.KEY}/{file}.yaml"])
+        assert {"op": "replace", "path": "/metadata/name", "value": name} in ops
+        assert {"op": "replace", "path": "/metadata/namespace", "value": "my-cluster"} in ops
+
+    def test_policy_patch_is_the_peer_pods_policy(self):
+        ops = yaml.safe_load(generate_crossplane_patches(_tier_params(pol.TIER_COCO))[f"patches/{self.KEY}/policy.yaml"])
+        (op,) = [o for o in ops if o["path"] == "/spec/forProvider/policy"]
+        assert op["value"] == pol.render(
+            pol.component_policy(self.KEY, "my-cluster", "us-east-2", "openshiftpartnerlabs.com"))
+
+    def test_access_key_names_its_target_and_delivery(self):
+        patches = generate_crossplane_patches(_tier_params(pol.TIER_COCO))
+        path = f"patches/{self.KEY}/access-key.yaml"
+        (op,) = _annotation_ops(patches, path)
+        assert op["value"] == {
+            ANNOTATION_CREDENTIALS_REQUEST: "openshift-sandboxed-containers-aws",
+            ANNOTATION_TARGET_NAMESPACE: "openshift-sandboxed-containers-operator",
+            ANNOTATION_TARGET_SECRET: "peer-pods-secret",
+            ANNOTATION_DELIVERY: "post-provision",
+        }
+        assert {"op": "replace", "path": "/spec/writeConnectionSecretToRef/name",
+                "value": "my-cluster-peer-pods-credentials-raw"} in yaml.safe_load(patches[path])
+
+    @pytest.mark.parametrize("component", pol.COMPONENTS, ids=lambda c: c.key)
+    def test_operator_access_keys_have_no_delivery_annotation(self, component):
+        patches = generate_crossplane_patches(_tier_params(pol.TIER_COCO))
+        (op,) = _annotation_ops(patches, f"patches/{component.key}/access-key.yaml")
+        assert ANNOTATION_DELIVERY not in op["value"]
+
+    def test_base_tier_has_no_peer_pods_and_equals_virt(self):
+        base = generate_crossplane_patches(_tier_params("base"))
+        assert not [path for path in base if self.KEY in path]
+        assert self.KEY not in base["kustomization.yaml"]
+        assert base == generate_crossplane_patches(_tier_params("virt"))
+
+    def test_legacy_mode_has_no_peer_pods_patch(self):
+        legacy = generate_crossplane_patches(
+            _tier_params(pol.TIER_COCO, provider_options={"credentials_mode": "legacy"}))
+        assert not [path for path in legacy if self.KEY in path]
+        assert self.KEY not in legacy["kustomization.yaml"]
+
+
 # ===================== write_cluster_dir tests =====================
 
 
@@ -367,6 +451,16 @@ class TestWriteClusterDir:
         resource = kust["resources"][0]
         assert "cluster-templates" in resource
         assert "aws/standard/crossplane" in resource
+
+    @pytest.mark.parametrize("topology", ["standard", "compact", "sno"])
+    @pytest.mark.parametrize("tier,base_dir", [(pol.TIER_COCO, "crossplane-scoped-coco"), ("base", "crossplane-scoped")])
+    def test_crossplane_base_follows_the_tier(self, tier, base_dir, topology, tmp_path):
+        tpl_dir = tmp_path / "cluster-templates"
+        tpl_dir.mkdir()
+        write_cluster_dir(str(tmp_path), _tier_params(tier, topology=topology), str(tpl_dir))
+        kust = yaml.safe_load((tmp_path / "my-cluster" / "crossplane" / "kustomization.yaml").read_text())
+        (resource,) = kust["resources"]
+        assert resource.endswith(f"aws/{topology}/{base_dir}")
 
     def test_profile_param_flows_through(self, tmp_path):
         tpl_dir = tmp_path / "cluster-templates"
@@ -733,6 +827,9 @@ def _template_resources(path):
     found = set()
     kust = yaml.safe_load(open(os.path.join(path, "kustomization.yaml"), encoding="utf-8"))
     for res in kust["resources"]:
+        if os.path.isdir(os.path.join(path, res)):  # a base that extends another base
+            found |= _template_resources(os.path.join(path, res))
+            continue
         with open(os.path.join(path, res), encoding="utf-8") as fh:
             for d in yaml.safe_load_all(fh):
                 if d:
@@ -755,3 +852,26 @@ class TestScopedTemplatesMatchPatches:
         kust = yaml.safe_load(generate_crossplane_patches(legacy_params)["kustomization.yaml"])
         targets = {(e["target"]["kind"], e["target"]["name"]) for e in kust["patches"]}
         assert targets <= _template_resources(os.path.join(REPO_TEMPLATES, "aws", topology, "crossplane"))
+
+    @pytest.mark.parametrize("topology", ["standard", "compact", "sno"])
+    def test_coco_patch_targets_are_the_scoped_base_plus_peer_pods(self, topology):
+        p = ClusterParams(name="t1", region="us-east-2", tier=pol.TIER_COCO, topology=topology)
+        scoped = _template_resources(os.path.join(REPO_TEMPLATES, "aws", topology, "crossplane-scoped"))
+        coco = _template_resources(os.path.join(REPO_TEMPLATES, "aws", topology, "crossplane-scoped-coco"))
+        assert _patch_targets(generate_crossplane_patches(p)) == coco
+        placeholder = f"cluster-placeholder-{pol.PEER_PODS.key}"
+        assert scoped < coco
+        assert coco - scoped == {
+            ("User", placeholder),
+            ("Policy", f"{placeholder}-policy"),
+            ("UserPolicyAttachment", f"{placeholder}-attachment"),
+            ("AccessKey", f"{placeholder}-access-key"),
+        }
+
+    def test_coco_bases_are_identical_across_topologies(self):
+        def files(topology: str) -> dict[str, bytes]:
+            base = pathlib.Path(REPO_TEMPLATES, "aws", topology, "crossplane-scoped-coco")
+            return {f.name: f.read_bytes() for f in base.iterdir()}
+
+        assert set(files("standard")) == {"kustomization.yaml", "component-peer-pods.yaml"}
+        assert files("standard") == files("compact") == files("sno")

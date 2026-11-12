@@ -18,9 +18,11 @@ CLUSTER_LABEL = "openshiftpartnerlabs.com/cluster"
 
 # Annotations on each operator AccessKey: the CredentialsRequest it serves and the spoke Secret
 # its key is delivered to. The installer AccessKey carries none, which tells the two apart.
+# ANNOTATION_DELIVERY is set only on an AccessKey whose key is delivered outside the Hive install manifests.
 ANNOTATION_CREDENTIALS_REQUEST = "openshiftpartnerlabs.com/credentials-request"
 ANNOTATION_TARGET_NAMESPACE = "openshiftpartnerlabs.com/target-namespace"
 ANNOTATION_TARGET_SECRET = "openshiftpartnerlabs.com/target-secret"
+ANNOTATION_DELIVERY = "openshiftpartnerlabs.com/delivery"
 
 
 def dump(obj: Any) -> str:
