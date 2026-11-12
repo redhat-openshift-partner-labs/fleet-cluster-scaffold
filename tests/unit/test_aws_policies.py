@@ -22,6 +22,9 @@ MUTATING = ("Terminate", "Delete", "Detach", "Attach", "Modify", "Revoke", "Auth
             "Apply", "Configure", "Add", "Remove", "Release", "Allocate", "Encrypt", "Decrypt", "Generate",
             "ReEncrypt", "Abort")
 
+# Conditioned on TAG_KEY alone: fleet sets only that key on the cluster's pod VM image and its snapshot
+SINGLE_KEY_STATEMENTS = {(pol.PEER_PODS.key, "RunFromPodVMImage")}
+
 
 def _gaps(requests) -> list[str]:
     return pol.coverage_gaps(requests, NAME, REGION, DOMAIN)
@@ -250,7 +253,7 @@ class TestSpokeInvariants:
         """Post-install, resources tagged only kubernetes.io/cluster/<infraID> (CCM, CSI) stay manageable."""
         by_sid = {st["Sid"]: st for st in _statements(doc)}
         for sid, st in by_sid.items():
-            if pol.TAG_KEY not in json.dumps(st.get("Condition", {})):
+            if pol.TAG_KEY not in json.dumps(st.get("Condition", {})) or (label, sid) in SINGLE_KEY_STATEMENTS:
                 continue
             twin = by_sid.get(f"{sid}ByClusterTag")
             assert twin, f"{label}/{sid} has no ByClusterTag twin"
@@ -274,21 +277,47 @@ class TestSpokeInvariants:
 
 
 class TestInstallerPolicy:
-    def test_no_iam_escalation_actions(self):
-        doc = pol.installer_policy(NAME)
+    VMIMPORT_ROLE = f"arn:aws:iam::*:role/{NAME}-vmimport-role"
+
+    @pytest.mark.parametrize("tier", [None, pol.TIER_COCO])
+    def test_no_iam_escalation_actions(self, tier):
+        doc = pol.installer_policy(NAME, tier)
         granted = _allowed_actions(doc)
         forbidden = {"iam:*", "iam:CreateUser", "iam:CreateAccessKey", "iam:PutUserPolicy", "iam:AttachUserPolicy",
                      "iam:CreateRole", "iam:PutRolePolicy", "iam:AttachRolePolicy", "iam:CreatePolicy",
                      "iam:CreatePolicyVersion", "iam:UpdateAssumeRolePolicy", "sts:*", "*"}
         assert not granted & forbidden
 
-    def test_iam_writes_limited_to_cluster(self):
-        allowed = (pol.node_role_arns(NAME), f"arn:aws:iam::*:instance-profile/{PREFIX}-?????-*")
-        for st in _statements(pol.installer_policy(NAME)):
+    @pytest.mark.parametrize("tier", [None, pol.TIER_COCO])
+    def test_iam_writes_limited_to_cluster(self, tier):
+        allowed = [pol.node_role_arns(NAME), f"arn:aws:iam::*:instance-profile/{PREFIX}-?????-*"]
+        if tier == pol.TIER_COCO:
+            allowed.append(self.VMIMPORT_ROLE)
+        for st in _statements(pol.installer_policy(NAME, tier)):
             writes = [a for a in _as_list(st["Action"])
                       if a.startswith("iam:") and not a.split(":")[1].startswith(("Get", "List", "Simulate"))]
             if writes:
                 assert st["Resource"] in allowed, st["Sid"]
+
+    def test_without_a_tier_the_statements_are_the_five_before_the_import_role(self):
+        assert [st["Sid"] for st in _statements(pol.installer_policy(NAME))] == [
+            "Infrastructure", "IAMRead", "ClusterRoles", "PassClusterRoles", "ClusterInstanceProfiles"]
+
+    @pytest.mark.parametrize("tier", ["base", "virt", "ai"])
+    def test_tier_without_components_adds_nothing(self, tier):
+        assert pol.installer_policy(NAME, tier) == pol.installer_policy(NAME)
+
+    def test_coco_adds_exactly_the_import_role_pass(self):
+        """No condition: whether ImportSnapshot sends iam:PassedToService is not verified."""
+        base, coco = _statements(pol.installer_policy(NAME)), _statements(pol.installer_policy(NAME, pol.TIER_COCO))
+        assert coco[:-1] == base
+        assert coco[-1] == {"Sid": "PassVMImportRole", "Effect": "Allow", "Action": ["iam:PassRole"],
+                            "Resource": self.VMIMPORT_ROLE}
+        assert pol.vmimport_role_arn(NAME) == self.VMIMPORT_ROLE
+
+    def test_fits_policy_size_limit_at_max_name_length(self):
+        name = "a" * (pol.IAM_NAME_MAX - pol.MAX_NAME_SUFFIX)
+        assert len(pol.render(pol.installer_policy(name, pol.TIER_COCO))) <= pol.MANAGED_POLICY_MAX
 
     def test_role_access_limited_to_node_roles(self):
         by_sid = {st["Sid"]: st for st in _statements(pol.installer_policy(NAME))}
@@ -355,13 +384,14 @@ class TestPeerPodsPolicy:
         assert self._conditions("ec2:RunInstances", resource) == self.RESOURCE_OWNED
 
     @pytest.mark.parametrize("resource", ["image", "snapshot"])
-    def test_launch_only_from_pod_vm_image(self, resource):
+    def test_launch_only_from_the_clusters_own_image(self, resource):
+        """One ownership key: fleet tags the image and its snapshot with TAG_KEY only."""
         assert self._conditions("ec2:RunInstances", resource) == [
-            {"StringEquals": {f"ec2:ResourceTag/{pol.PODVM_IMAGE_TAG}": "true"}}]
+            {"StringEquals": {f"ec2:ResourceTag/{pol.TAG_KEY}": NAME}}]
 
-    def test_pod_vm_image_tag_is_not_the_ownership_tag(self):
-        """An ownership condition is found by TAG_KEY; the image tag must not read as one."""
-        assert pol.TAG_KEY not in pol.PODVM_IMAGE_TAG
+    def test_shared_image_tag_is_removed(self):
+        assert not hasattr(pol, "PODVM_IMAGE_TAG")
+        assert "openshiftpartnerlabs.com/podvm-image" not in pol.render(self.DOC)
 
     def test_terminate_only_owned_instances(self):
         assert self._conditions("ec2:TerminateInstances", "instance") == self.RESOURCE_OWNED
@@ -373,10 +403,48 @@ class TestPeerPodsPolicy:
 
     def test_ownership_conditions_match_the_exact_cluster_name(self):
         owned = [st["Condition"] for st in _statements(self.DOC) if pol.TAG_KEY in json.dumps(st.get("Condition", {}))]
-        assert len(owned) == 3  # instance request tag, network resource tag, terminate resource tag
+        assert len(owned) == 4  # instance request tag; network, image and snapshot, terminate resource tags
         for cond in owned:
             assert list(cond) == ["StringEquals"]
             assert list(cond["StringEquals"].values()) == [NAME]
+
+
+class TestVMImportRole:
+    """ec2 ImportSnapshot service role of a coco cluster; assumed by the VM Import service, never by the spoke."""
+
+    DOC = pol.vmimport_role_policy(NAME)
+    BUCKET = f"arn:aws:s3:::{PREFIX}-?????-podvm-image"
+
+    def test_names(self):
+        assert (pol.PODVM_BUCKET_SUFFIX, pol.VMIMPORT_ROLE_SUFFIX) == ("-podvm-image", "-vmimport-role")
+
+    def test_role_name_fits_the_iam_name_budget(self):
+        assert len(pol.VMIMPORT_ROLE_SUFFIX) <= pol.MAX_NAME_SUFFIX
+
+    def test_trusts_only_the_vm_import_service(self):
+        assert pol.VMIMPORT_ASSUME_ROLE_POLICY == {"Version": "2012-10-17", "Statement": [{
+            "Effect": "Allow", "Principal": {"Service": "vmie.amazonaws.com"}, "Action": "sts:AssumeRole",
+            "Condition": {"StringEquals": {"sts:Externalid": "vmimport"}}}]}
+
+    def test_s3_limited_to_the_cluster_staging_bucket(self):
+        (st,) = [s for s in _statements(self.DOC) if any(a.startswith("s3:") for a in s["Action"])]
+        assert st["Action"] == ["s3:GetBucketLocation", "s3:GetObject", "s3:ListBucket"]
+        assert st["Resource"] == [self.BUCKET, f"{self.BUCKET}/*"]
+        assert fnmatch.fnmatchcase("arn:aws:s3:::0171d46a-scopedaws-fz9mx-podvm-image",
+                                   self.BUCKET.replace(PREFIX, pol.infra_prefix("0171d46a-scopedaws")))
+
+    def test_ec2_actions_are_those_of_the_vm_import_service_role(self):
+        (st,) = [s for s in _statements(self.DOC) if s["Sid"] == "ImportSnapshot"]
+        assert st["Action"] == ["ec2:ModifySnapshotAttribute", "ec2:CopySnapshot", "ec2:RegisterImage", "ec2:Describe*"]
+
+    def test_no_s3_write_and_no_iam_action(self):
+        for a in _allowed_actions(self.DOC):
+            assert not a.startswith(("s3:Put", "s3:Delete", "iam:")) and a not in ("s3:*", "*"), a
+
+    def test_fits_inline_policy_size_at_max_name_length(self):
+        """Inline role policy (limit INLINE_ROLE_POLICY_MAX); the document stays under 2,048 characters."""
+        name = "a" * (pol.IAM_NAME_MAX - pol.MAX_NAME_SUFFIX)
+        assert len(pol.render(pol.vmimport_role_policy(name))) < 2048 < pol.INLINE_ROLE_POLICY_MAX
 
 
 class TestCrossClusterIsolation:
@@ -396,11 +464,13 @@ class TestCrossClusterIsolation:
         infra = f"{pol.infra_prefix(name)}-k3x9q"
         iam = f"arn:aws:iam::{cls.ACCOUNT}"
         bucket = f"arn:aws:s3:::{infra}-image-registry-us-east-2-abcdefghijkl"
+        podvm_bucket = f"arn:aws:s3:::{infra}-podvm-image"  # fleet's staging bucket for the pod VM disk
         return [
             *(f"{iam}:instance-profile/{infra}-{r}-profile" for r in ("master", "worker")),
-            *(f"{iam}:role/{name}-{r}-role" for r in ("master", "worker")),
+            *(f"{iam}:role/{name}-{r}-role" for r in ("master", "worker", "vmimport")),
             *(f"{iam}:user/{name}-{c.key}" for c in pol.COMPONENTS),
             bucket, f"{bucket}/docker/registry/v2",
+            podvm_bucket, f"{podvm_bucket}/podvm.raw",
             f"router.apps.{name}.{DOMAIN}",
         ]
 
@@ -409,7 +479,8 @@ class TestCrossClusterIsolation:
         docs = {c.key: pol.component_policy(c.key, cls.OWN, REGION, DOMAIN) for c in pol.components_for(pol.TIER_COCO)}
         docs["master-role"] = pol.master_role_policy(cls.OWN, REGION, DOMAIN)
         docs["worker-role"] = pol.worker_role_policy()
-        docs["installer"] = pol.installer_policy(cls.OWN)
+        docs["vmimport-role"] = pol.vmimport_role_policy(cls.OWN)
+        docs["installer"] = pol.installer_policy(cls.OWN, pol.TIER_COCO)
         return docs
 
     @staticmethod

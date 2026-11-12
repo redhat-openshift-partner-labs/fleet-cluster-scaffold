@@ -26,9 +26,15 @@ minor upgrade.
 
 The coco tier adds the peer-pods credential, which cloud-api-adaptor uses to launch pod VMs. Pod VMs
 carry no instance profile, so they are owned by tag (the two ownership keys above). Launches are
-limited to images and snapshots tagged PODVM_IMAGE_TAG=true. The actions mirror the calls of
-cloud-api-adaptor's AWS provider; the sandboxed-containers operator's CredentialsRequest (ec2:*,
-pod VM image build) is not granted and is outside coverage_gaps().
+limited to images and snapshots that carry the ownership tag TAG_KEY=<cluster name>. The actions
+mirror the calls of cloud-api-adaptor's AWS provider; the sandboxed-containers operator's
+CredentialsRequest (ec2:*, pod VM image build) is not granted and is outside coverage_gaps().
+
+The fleet pipeline builds one pod VM image per cluster with the installer credential: it stages the
+disk in the bucket <infra ID>PODVM_BUCKET_SUFFIX, calls ec2 ImportSnapshot and RegisterImage, and
+sets the ownership tag on the image and its snapshot. ImportSnapshot assumes the cluster's import
+role <cluster name>VMIMPORT_ROLE_SUFFIX (VMIMPORT_ASSUME_ROLE_POLICY, vmimport_role_policy), which
+reads only that bucket. The installer policy of such a tier may pass that one role.
 """
 
 from __future__ import annotations
@@ -56,8 +62,9 @@ _INFRA_BASE_MAX = 21
 
 TIER_COCO = "coco"
 DELIVERY_POST_PROVISION = "post-provision"
-# On the pod VM AMI and its backing snapshots (value "true"); set by fleet, never by a spoke credential on an image
-PODVM_IMAGE_TAG = "openshiftpartnerlabs.com/podvm-image"
+# Pod VM image build (fleet post-provision): staging bucket <infra ID>-podvm-image, import role <cluster name>-vmimport-role
+PODVM_BUCKET_SUFFIX = "-podvm-image"
+VMIMPORT_ROLE_SUFFIX = "-vmimport-role"
 
 
 @dataclass(frozen=True)
@@ -117,6 +124,11 @@ def infra_id_pattern(cluster_name: str) -> str:
 def node_role_arns(cluster_name: str) -> list[str]:
     """The cluster's BYO node roles (install-config iamRole)."""
     return [f"arn:aws:iam::*:role/{cluster_name}-{role}-role" for role in ("master", "worker")]
+
+
+def vmimport_role_arn(cluster_name: str) -> str:
+    """The cluster's ec2 ImportSnapshot service role (tiers in TIER_COMPONENTS)."""
+    return f"arn:aws:iam::*:role/{cluster_name}{VMIMPORT_ROLE_SUFFIX}"
 
 
 def render(doc: dict[str, Any]) -> str:
@@ -295,14 +307,14 @@ def _volume_statements(s: _Scope, sid: str) -> list[dict[str, Any]]:
 
 
 def _peer_pods(s: _Scope) -> dict:
-    # Pod VMs carry no instance profile: ownership is by tag, and the image is limited by PODVM_IMAGE_TAG
-    podvm_image = {"StringEquals": {f"ec2:ResourceTag/{PODVM_IMAGE_TAG}": "true"}}
+    # Pod VMs carry no instance profile: ownership is by tag. Fleet sets only TAG_KEY on the cluster's
+    # pod VM image and its snapshot, so RunFromPodVMImage has no ByClusterTag statement.
     return _doc(
         _stmt("Read", ["ec2:DescribeAddresses", "ec2:DescribeImages", "ec2:DescribeInstances", "ec2:DescribeInstanceTypes"]),
         *_owned("RunOwnedInstance", ["ec2:RunInstances"], _ec2("instance"), s.request_tag_any),
         *_owned("RunInOwnedNetwork", ["ec2:RunInstances"], [_ec2("subnet"), _ec2("security-group")], s.ec2_owned_any),
         _stmt("RunSupporting", ["ec2:RunInstances"], [_ec2("volume"), _ec2("network-interface")]),
-        _stmt("RunFromPodVMImage", ["ec2:RunInstances"], [_ec2("image"), _ec2("snapshot")], podvm_image),
+        _stmt("RunFromPodVMImage", ["ec2:RunInstances"], [_ec2("image"), _ec2("snapshot")], s.ec2_owned),
         *_owned("TerminateOwned", ["ec2:TerminateInstances"], _ec2("instance"), s.ec2_owned_any),
         _stmt("TagOnLaunch", ["ec2:CreateTags"], _ec2("instance"), s.ec2_create_action("RunInstances")),
     )
@@ -425,15 +437,38 @@ NODE_ASSUME_ROLE_POLICY = _doc({
 })
 
 
+# ===================== pod VM image import role =====================
+
+# ec2 ImportSnapshot service role; the external ID is fixed by the VM Import service
+VMIMPORT_ASSUME_ROLE_POLICY = _doc({
+    "Effect": "Allow",
+    "Principal": {"Service": "vmie.amazonaws.com"},
+    "Action": "sts:AssumeRole",
+    "Condition": {"StringEquals": {"sts:Externalid": "vmimport"}},
+})
+
+
+def vmimport_role_policy(name: str) -> dict:
+    """Import role: read the staged disk from the cluster's bucket; the EC2 actions the VM Import service requires."""
+    bucket = f"arn:aws:s3:::{infra_id_pattern(name)}{PODVM_BUCKET_SUFFIX}"
+    return _doc(
+        _stmt("ReadStagedDisk", ["s3:GetBucketLocation", "s3:GetObject", "s3:ListBucket"], [bucket, f"{bucket}/*"]),
+        _stmt("ImportSnapshot", ["ec2:ModifySnapshotAttribute", "ec2:CopySnapshot", "ec2:RegisterImage", "ec2:Describe*"]),
+    )
+
+
 # ===================== installer policy (hub only) =====================
 
-def installer_policy(name: str) -> dict:
+def installer_policy(name: str, tier: str | None = None) -> dict:
     """Installer/destroy and hub cert-manager DNS-01. Never copied to the spoke in Manual mode.
 
     Network/compute stay broad (the installer creates the VPC); IAM is limited to the cluster's
-    BYO roles and the instance profiles the installer wraps around them.
+    BYO roles and the instance profiles the installer wraps around them. A tier in TIER_COMPONENTS
+    also passes the cluster's import role to ec2 ImportSnapshot.
     """
     roles = node_role_arns(name)
+    # No iam:PassedToService condition: whether ImportSnapshot sends that key is not verified
+    pass_vmimport = [_stmt("PassVMImportRole", ["iam:PassRole"], vmimport_role_arn(name))] if tier in TIER_COMPONENTS else []
     return _doc(
         _stmt("Infrastructure", ["ec2:*", "elasticloadbalancing:*", "route53:*", "s3:*", "tag:*", "servicequotas:*"]),
         _stmt("IAMRead", ["iam:GetUser", "iam:ListRoles", "iam:ListUsers", "iam:ListInstanceProfiles",
@@ -447,4 +482,5 @@ def installer_policy(name: str) -> dict:
             "iam:AddRoleToInstanceProfile", "iam:RemoveRoleFromInstanceProfile",
             "iam:TagInstanceProfile", "iam:UntagInstanceProfile",
         ], f"arn:aws:iam::*:instance-profile/{infra_id_pattern(name)}-*"),
+        *pass_vmimport,
     )
