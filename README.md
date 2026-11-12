@@ -288,7 +288,7 @@ The scaffold records no AMI ID. The policy allows launches from any image and sn
    - `AWS_SUBNET_ID` and `AWS_SG_IDS` name a subnet and security groups owned by the cluster.
    - `PODVM_AMI_ID` is the AMI in this account that carries `openshiftpartnerlabs.com/podvm-image=true` on the image and on its snapshots, with boot mode `uefi` or `uefi-preferred`.
    - `PODVM_INSTANCE_TYPE` is `podvm-instance-type` from `metadata.yaml`.
-   - `DISABLECVM` is unset.
+   - `DISABLECVM` is `"false"`. The operator overwrites this key on every reconcile from the ConfigMap `osc-feature-gates` in the same namespace: `"false"` when `confidential` is `"true"`, `"true"` otherwise (`controllers/fg_handler.go` and `controllers/confidential_handler.go` in `openshift/sandboxed-containers-operator`, read on 2026-11-12). Post-provision writes `osc-feature-gates` with `confidential: "true"` before `peer-pods-cm`. With `DISABLECVM` set to `"true"` cloud-api-adaptor launches pod VMs without SEV-SNP.
 4. Ports 15150 and 9000 are opened on the node security group with hub credentials.
 5. Teardown terminates the instances that carry the ownership tag before the cluster is uninstalled.
 
