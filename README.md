@@ -24,7 +24,7 @@ Given a cloud, cluster name, region, and tier, `fleet-scaffold-cluster` generate
 
 - **Hive resources** -- ClusterDeployment, MachinePool, ManagedCluster, KlusterletAddonConfig, install-config Secret, and Namespace patches
 - **Crossplane resources** -- per-cluster cloud credentials
-  - AWS: installer IAM user, cluster-scoped IAM users for each OpenShift operator, and BYO node roles
+  - AWS: installer IAM user, cluster-scoped IAM users for each OpenShift operator, and BYO node roles; the `coco` tier adds a cluster-scoped peer-pods IAM user
   - Azure: ResourceGroup, Entra Application, ServicePrincipal, client secret, and RoleAssignments
 - **Cluster metadata** -- `platform` and cloud-specific keys read by the fleet pipelines, plus optional values such as the htpasswd identity provider name
 
@@ -88,7 +88,7 @@ Run `fleet-scaffold-cluster CLOUD --help` for the full flag list of a cloud.
 |----------------------------|------------------------------|--------------------------------------------------------------|
 | `--name`                   | *(required)*                 | Cluster name (valid DNS-1123 label: lowercase alphanumeric and hyphens, 1-63 chars) |
 | `--region`                 | *(required)*                 | Cloud region (e.g. `us-east-1`, `eastus2`)                   |
-| `--tier`                   | *(required)*                 | Cluster tier: `base`, `virt`, `ai`                           |
+| `--tier`                   | *(required)*                 | Cluster tier: `base`, `virt`, `ai`, or `coco` (AWS only; see [Confidential containers tier](#confidential-containers-tier---tier-coco)) |
 | `--topology`               | `standard`                   | `standard`, `compact`, or `sno`; selects `cluster-templates/<cloud>/<topology>` |
 | `--environment`            | `development`                | Environment label applied to ManagedCluster                  |
 | `--base-domain`            | `openshiftpartnerlabs.com`   | Cluster base DNS domain                                      |
@@ -119,6 +119,7 @@ Run `fleet-scaffold-cluster CLOUD --help` for the full flag list of a cloud.
 | `--worker-type`             | `m7i.2xlarge`            |
 | `--zones`                   | `<region>a,b,c`          |
 | `--legacy-mint-credentials` | off (rollback only, see below) |
+| `--podvm-instance-type`     | `m6a.large` (requires `--tier coco`, see [Confidential containers tier](#confidential-containers-tier---tier-coco)) |
 
 ```bash
 fleet-scaffold-cluster aws \
@@ -224,6 +225,82 @@ This identity can create IAM policies and roles, which is account-admin-equivale
 
 **`--legacy-mint-credentials`** generates the previous Mint-mode overlay: the account-admin installer policy, with the key stored on the spoke. It exists only as a rollback while the scoped workflow is validated, and prints a warning.
 
+#### Confidential containers tier (--tier coco)
+
+`--tier coco` generates a scoped AWS overlay for confidential containers in the peer-pod model. Each confidential pod runs in its own EC2 instance (pod VM) with AMD SEV-SNP, launched by cloud-api-adaptor. The overlay adds the cluster-scoped IAM credential that cloud-api-adaptor uses. The fleet pipeline installs and configures the operator (contract below).
+
+```bash
+fleet-scaffold-cluster aws \
+  --name coco-east-01 \
+  --region us-east-2 \
+  --tier coco \
+  --podvm-instance-type m6a.xlarge
+```
+
+**Generated in addition to the scoped overlay:**
+
+- `crossplane/kustomization.yaml` references `cluster-templates/aws/<topology>/crossplane-scoped-coco/`, which is `crossplane-scoped/` plus the peer-pods placeholders.
+- `crossplane/patches/peer-pods/{user,policy,attachment,access-key}.yaml` for the User `<name>-peer-pods`, the Policy `<name>-peer-pods-policy`, the UserPolicyAttachment `<name>-peer-pods-attachment` and the AccessKey `<name>-peer-pods-access-key`. The AccessKey writes the Secret `<name>-peer-pods-credentials-raw`.
+- The AccessKey carries four annotations:
+
+  | Annotation | Value |
+  |---|---|
+  | `openshiftpartnerlabs.com/credentials-request` | `openshift-sandboxed-containers-aws` |
+  | `openshiftpartnerlabs.com/target-namespace` | `openshift-sandboxed-containers-operator` |
+  | `openshiftpartnerlabs.com/target-secret` | `peer-pods-secret` |
+  | `openshiftpartnerlabs.com/delivery` | `post-provision` |
+
+- `metadata.yaml` gains `podvm-instance-type: <type>`.
+- The ManagedCluster label is `tier: coco`.
+
+Overlays of the other tiers are unchanged.
+
+**Validation.** Each failure exits `1` before anything is written.
+
+- `--region` must be `us-east-2` or `eu-west-1`.
+- `--podvm-instance-type` (default `m6a.large`) must be one of `m6a.{large,xlarge,2xlarge,4xlarge,8xlarge}`, `c6a.{large,xlarge,2xlarge,4xlarge,8xlarge,12xlarge,16xlarge}`, `r6a.{large,xlarge,2xlarge,4xlarge}`.
+- `--tier coco` cannot be combined with `--legacy-mint-credentials`.
+- `--podvm-instance-type` requires `--tier coco`.
+- `azure --tier coco` is rejected: `--tier coco is not supported on azure`.
+
+The region and instance-type lists are the shared-tenancy AMD SEV-SNP support listed in the AWS EC2 User Guide, [AMD SEV-SNP](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/sev-snp.html), read on 2026-11-12. They are defined as `SEV_SNP_REGIONS` and `SEV_SNP_INSTANCE_TYPES` in `src/scaffold/providers/aws.py`. The scaffold does not check `--worker-type`; only pod VMs need SEV-SNP.
+
+**Peer-pods policy** (`_peer_pods` in `aws_policies.py`). The actions are the EC2 calls of cloud-api-adaptor's AWS provider (`src/cloud-providers/aws`, `main`, read on 2026-11-12). Pod VMs carry no instance profile, so ownership is by tag. "Ownership tag" means `openshiftpartnerlabs.com/cluster=<name>` or `kubernetes.io/cluster/<infraID>=owned`; the second key matches nothing while the policy holds `INFRA_ID_PLACEHOLDER`.
+
+| Statement | Action | Resource | Condition |
+|---|---|---|---|
+| `Read` | `ec2:DescribeAddresses`, `ec2:DescribeImages`, `ec2:DescribeInstances`, `ec2:DescribeInstanceTypes` | `*` | none |
+| `RunOwnedInstance`, `RunOwnedInstanceByClusterTag` | `ec2:RunInstances` | instance | the request sets an ownership tag on the instance |
+| `RunInOwnedNetwork`, `RunInOwnedNetworkByClusterTag` | `ec2:RunInstances` | subnet, security group | the resource carries an ownership tag |
+| `RunSupporting` | `ec2:RunInstances` | volume, network interface | none |
+| `RunFromPodVMImage` | `ec2:RunInstances` | image, snapshot | the resource carries `openshiftpartnerlabs.com/podvm-image=true` |
+| `TerminateOwned`, `TerminateOwnedByClusterTag` | `ec2:TerminateInstances` | instance | the instance carries an ownership tag |
+| `TagOnLaunch` | `ec2:CreateTags` | instance | `ec2:CreateAction` is `RunInstances` |
+
+The scaffold records no AMI ID. The policy allows launches from any image and snapshot that carries the tag `openshiftpartnerlabs.com/podvm-image=true` (`PODVM_IMAGE_TAG`).
+
+**Fleet pipeline contract** (`metadata.yaml`: `podvm-instance-type`; the fleet change is tracked separately):
+
+1. An AccessKey annotated `openshiftpartnerlabs.com/delivery: post-provision` is waited for like the operator AccessKeys and is left out of `<name>-cloud-credentials-manifests`. A pipeline image without this rule must not provision a coco overlay.
+2. Post-provision writes the Secret `openshift-sandboxed-containers-operator/peer-pods-secret` with `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` from `<name>-peer-pods-credentials-raw`.
+3. Post-provision writes the ConfigMap `peer-pods-cm`:
+   - `TAGS` includes `openshiftpartnerlabs.com/cluster=<name>`.
+   - `AWS_SUBNET_ID` and `AWS_SG_IDS` name a subnet and security groups owned by the cluster.
+   - `PODVM_AMI_ID` is the AMI in this account that carries `openshiftpartnerlabs.com/podvm-image=true` on the image and on its snapshots, with boot mode `uefi` or `uefi-preferred`.
+   - `PODVM_INSTANCE_TYPE` is `podvm-instance-type` from `metadata.yaml`.
+   - `DISABLECVM` is unset.
+4. Ports 15150 and 9000 are opened on the node security group with hub credentials.
+5. Teardown terminates the instances that carry the ownership tag before the cluster is uninstalled.
+
+**Limits:**
+
+- These cloud-api-adaptor options are unsupported, because the policy grants none of their actions: `USE_PUBLIC_IP`, multiple network interfaces, EBS volumes, launch templates, SSH key pairs, and AMIs encrypted with a customer managed KMS key.
+- The operator's CredentialsRequest `openshift-sandboxed-containers-aws` asks for `ec2:*` on `*` and for the IAM and S3 actions of the pod VM image build. The policy grants neither.
+- `ec2:TerminateInstances` is scoped by ownership tag only. The peer-pods credential can terminate the nodes of its own cluster, which carry the same tag. It cannot terminate another cluster's instances.
+- A cluster-admin can tag its own cluster's snapshots with `openshiftpartnerlabs.com/podvm-image=true`. Other coco clusters can then launch instances from those snapshots.
+- The [release check](#release-check) does not cover the peer-pods policy.
+- Red Hat's support status for confidential containers on AWS is not confirmed (checked on 2026-11-12).
+
 ### Azure
 
 | Flag                           | Default             | Description                                              |
@@ -304,7 +381,7 @@ If the overlays are synced by a GitOps tool, exclude `spec.forProvider.principal
 ```
 <cluster-name>/
   kustomization.yaml            # aggregates hive/ and crossplane/
-  metadata.yaml                 # platform, cloud-specific pipeline keys, htpasswd provider name
+  metadata.yaml                 # platform, cloud-specific pipeline keys (AWS tier coco: podvm-instance-type), htpasswd provider name
   hive/
     kustomization.yaml           # references cluster-templates/<cloud>/<topology>/hive
     patches/
@@ -316,9 +393,10 @@ If the overlays are synced by a GitOps tool, exclude `spec.forProvider.principal
       managedcluster.yaml
       namespace.yaml
   crossplane/
-    kustomization.yaml           # references cluster-templates/<cloud>/<topology>/crossplane[-scoped]
+    kustomization.yaml           # references cluster-templates/<cloud>/<topology>/crossplane[-scoped[-coco]]
     patches/
       ...                        # AWS scoped: installer/, node-roles/, <operator>/
+                                 # AWS scoped, tier coco: also peer-pods/
                                  # AWS legacy: user, policy, policy-attachment, access-key
                                  # Azure: resource-group, application, service-principal,
                                  #        client-secret, role-assignment-*
@@ -332,7 +410,8 @@ The `cluster-templates/` directory contains shared base resources organized by c
 
 ```
 cluster-templates/
-  aws/      {standard,compact,sno}/{hive,crossplane-scoped,crossplane}   # crossplane/ = legacy Mint mode
+  aws/      {standard,compact,sno}/{hive,crossplane-scoped,crossplane-scoped-coco,crossplane}
+            # crossplane/ = legacy Mint mode; crossplane-scoped-coco/ = crossplane-scoped/ plus the peer-pods credential (tier coco)
   azure/    {standard,compact,sno}
   gcp/      {standard,compact,sno}   # templates only; no generator yet
 ```
@@ -365,6 +444,8 @@ Flags:
 - `--skip-release-check`: skip the check. The scoped policies are then unverified for that release. Not for normal use.
 
 The check is reported as not applicable for `--legacy-mint-credentials` and for Azure, which have no scoped policies. It runs even with `--skip-validation`.
+
+The peer-pods policy of the `coco` tier is outside the check: the release payload has no CredentialsRequest for it, so a coco overlay is checked for the same CredentialsRequests as the other tiers.
 
 ## Development
 

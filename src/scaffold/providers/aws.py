@@ -24,6 +24,7 @@ from scaffold.providers.base import (
     ANNOTATION_DELIVERY,
     ANNOTATION_TARGET_NAMESPACE,
     ANNOTATION_TARGET_SECRET,
+    TIERS,
     Provider,
     dump,
     rename_ops,
@@ -34,6 +35,16 @@ from scaffold.providers.base import (
 _LOG = logging.getLogger("scaffold")
 
 SCOPED, LEGACY = "scoped", "legacy"
+
+# AMD SEV-SNP on shared tenancy: regions and instance types (AWS EC2 User Guide, "AMD SEV-SNP", read 2026-11-12).
+# Pod VMs of the coco tier are launched with SEV-SNP enabled.
+SEV_SNP_REGIONS = frozenset({"us-east-2", "eu-west-1"})
+SEV_SNP_INSTANCE_TYPES = frozenset({
+    *(f"m6a.{size}" for size in ("large", "xlarge", "2xlarge", "4xlarge", "8xlarge")),
+    *(f"c6a.{size}" for size in ("large", "xlarge", "2xlarge", "4xlarge", "8xlarge", "12xlarge", "16xlarge")),
+    *(f"r6a.{size}" for size in ("large", "xlarge", "2xlarge", "4xlarge")),
+})
+DEFAULT_PODVM_INSTANCE_TYPE = "m6a.large"
 
 # (User, Policy, UserPolicyAttachment, AccessKey) placeholder names in the legacy and scoped installer bases
 _INSTALLER_PLACEHOLDERS = (
@@ -63,6 +74,7 @@ class AWSProvider(Provider):
     help = "Amazon Web Services"
     control_plane_type = "m7i.4xlarge"
     worker_type = "m7i.2xlarge"
+    tiers = (*TIERS, pol.TIER_COCO)
 
     def add_arguments(self, parser: argparse.ArgumentParser) -> None:
         parser.add_argument(
@@ -71,15 +83,53 @@ class AWSProvider(Provider):
             default=False,
             help="ROLLBACK ONLY: Mint mode with the account-admin installer policy (key is stored on the spoke)",
         )
+        parser.add_argument(
+            "--podvm-instance-type",
+            default=None,
+            help=f"Pod VM instance type with AMD SEV-SNP; requires --tier {pol.TIER_COCO} "
+                 f"(default: {DEFAULT_PODVM_INSTANCE_TYPE})",
+        )
 
-    def options_from_args(self, parsed: argparse.Namespace) -> dict[str, str]:
-        return {"credentials_mode": LEGACY if parsed.legacy_mint_credentials else SCOPED}
+    def options_from_args(self, parsed: argparse.Namespace) -> dict[str, str | None]:
+        return {
+            "credentials_mode": LEGACY if parsed.legacy_mint_credentials else SCOPED,
+            "podvm_instance_type": parsed.podvm_instance_type,  # None: flag not given
+        }
 
     @staticmethod
     def scoped(params: ClusterParams) -> bool:
         return params.provider_options.get("credentials_mode", SCOPED) == SCOPED
 
+    @staticmethod
+    def podvm_instance_type(params: ClusterParams) -> str:
+        requested = params.provider_options.get("podvm_instance_type")
+        return DEFAULT_PODVM_INSTANCE_TYPE if requested is None else requested
+
+    def _validate_tier(self, params: ClusterParams) -> None:
+        """Checks that depend on the tier; they apply in both credential modes."""
+        coco = pol.TIER_COCO
+        if params.tier != coco:
+            if params.provider_options.get("podvm_instance_type") is not None:
+                raise ValueError(f"--podvm-instance-type requires --tier {coco}.")
+            return
+        if not self.scoped(params):
+            raise ValueError(
+                f"--tier {coco} requires scoped credentials; it cannot be combined with --legacy-mint-credentials."
+            )
+        if params.region not in SEV_SNP_REGIONS:
+            raise ValueError(
+                f"--tier {coco} needs an AWS region with AMD SEV-SNP: {', '.join(sorted(SEV_SNP_REGIONS))} "
+                f"(got {params.region!r})."
+            )
+        podvm_type = self.podvm_instance_type(params)
+        if podvm_type not in SEV_SNP_INSTANCE_TYPES:
+            raise ValueError(
+                f"--podvm-instance-type {podvm_type!r} does not support AMD SEV-SNP; "
+                f"choose one of: {', '.join(sorted(SEV_SNP_INSTANCE_TYPES))}."
+            )
+
     def validate(self, params: ClusterParams) -> None:
+        self._validate_tier(params)
         if not self.scoped(params):
             _LOG.warning(
                 "WARNING: --legacy-mint-credentials stores an account-admin AWS key on the spoke "
@@ -141,7 +191,10 @@ class AWSProvider(Provider):
         return f"crossplane-scoped-{params.tier}" if params.tier in pol.TIER_COMPONENTS else "crossplane-scoped"
 
     def metadata(self, params: ClusterParams) -> dict[str, str]:
-        return {**super().metadata(params), "aws-credentials-mode": SCOPED if self.scoped(params) else LEGACY}
+        meta = {**super().metadata(params), "aws-credentials-mode": SCOPED if self.scoped(params) else LEGACY}
+        if params.tier == pol.TIER_COCO:
+            meta["podvm-instance-type"] = self.podvm_instance_type(params)
+        return meta
 
     def release_check_applies(self, params: ClusterParams) -> bool:
         return self.scoped(params)

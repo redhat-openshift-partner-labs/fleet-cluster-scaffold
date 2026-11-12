@@ -12,10 +12,13 @@ import yaml
 from scaffold.cli import main
 from scaffold.providers import PROVIDERS
 from scaffold.providers import aws_policies as pol
+from scaffold.providers.aws import DEFAULT_PODVM_INSTANCE_TYPE, SEV_SNP_INSTANCE_TYPES, SEV_SNP_REGIONS
 from scaffold.providers.base import (
     ANNOTATION_CREDENTIALS_REQUEST,
+    ANNOTATION_DELIVERY,
     ANNOTATION_TARGET_NAMESPACE,
     ANNOTATION_TARGET_SECRET,
+    CLUSTER_LABEL,
     TIERS,
 )
 from scaffold.release import ReleaseError, load_credentials_requests
@@ -839,3 +842,114 @@ def test_help_lists_release_flags(capsys):
     out = capsys.readouterr().out
     for flag in ("--release-image", "--credentials-requests-dir", "--skip-release-check"):
         assert flag in out
+
+
+# ======== coco tier (AWS confidential containers) ========
+
+PEER_PODS_FILES = ["access-key.yaml", "attachment.yaml", "policy.yaml", "user.yaml"]
+
+
+def _coco_args(tmp_path, name, *extra):
+    """_aws_args (us-east-2, --skip-validation) with --tier coco; a later --tier or --region in extra wins."""
+    return _aws_args(tmp_path, name, "--tier", pol.TIER_COCO, *extra)
+
+
+def test_coco_scaffolds_the_peer_pods_credential(tmp_path):
+    assert main(_coco_args(tmp_path, "cc1")) == 0
+    cluster = tmp_path / "cc1"
+    assert yaml.safe_load((cluster / "metadata.yaml").read_text()) == {
+        "platform": "aws", "aws-credentials-mode": "scoped", "podvm-instance-type": "m6a.large"}
+    mc = yaml.safe_load((cluster / "hive" / "patches" / "managedcluster.yaml").read_text())
+    assert [op["value"] for op in mc if op["path"] == "/metadata/labels/tier"] == ["coco"]
+    assert sorted(p.name for p in (cluster / "crossplane" / "patches" / "peer-pods").iterdir()) == PEER_PODS_FILES
+    kust = yaml.safe_load((cluster / "crossplane" / "kustomization.yaml").read_text())
+    assert kust["resources"][0].endswith("aws/standard/crossplane-scoped-coco")
+
+
+def test_coco_records_the_requested_podvm_instance_type(tmp_path):
+    assert main(_coco_args(tmp_path, "cc2", "--podvm-instance-type", "r6a.xlarge")) == 0
+    assert yaml.safe_load((tmp_path / "cc2" / "metadata.yaml").read_text())["podvm-instance-type"] == "r6a.xlarge"
+
+
+def test_coco_rejects_a_region_without_sev_snp(tmp_path, caplog):
+    assert main(_coco_args(tmp_path, "cc3", "--region", "us-east-1")) == 1
+    assert "--tier coco needs an AWS region with AMD SEV-SNP: eu-west-1, us-east-2 (got 'us-east-1')." in caplog.text
+    assert not (tmp_path / "cc3").exists()
+
+
+def test_coco_accepts_every_sev_snp_region(tmp_path):
+    for i, region in enumerate(sorted(SEV_SNP_REGIONS)):
+        assert main(_coco_args(tmp_path, f"cc3-{i}", "--region", region)) == 0
+
+
+def test_coco_rejects_a_podvm_instance_type_without_sev_snp(tmp_path, caplog):
+    assert main(_coco_args(tmp_path, "cc4", "--podvm-instance-type", "m7i.large")) == 1
+    assert ("--podvm-instance-type 'm7i.large' does not support AMD SEV-SNP; choose one of: "
+            f"{', '.join(sorted(SEV_SNP_INSTANCE_TYPES))}.") in caplog.text
+    assert not (tmp_path / "cc4").exists()
+
+
+def test_podvm_instance_type_requires_coco(tmp_path, caplog):
+    assert main(_aws_args(tmp_path, "cc5", "--podvm-instance-type", "m6a.large")) == 1
+    assert "--podvm-instance-type requires --tier coco." in caplog.text
+    assert not (tmp_path / "cc5").exists()
+
+
+def test_coco_rejects_legacy_mint_credentials(tmp_path, caplog):
+    assert main(_coco_args(tmp_path, "cc6", "--legacy-mint-credentials")) == 1
+    assert ("--tier coco requires scoped credentials; it cannot be combined with --legacy-mint-credentials."
+            in caplog.text)
+    assert not (tmp_path / "cc6").exists()
+
+
+def test_coco_is_not_supported_on_azure(tmp_path, caplog):
+    assert main(_azure_args(tmp_path, "cc7", "--tier", pol.TIER_COCO)) == 1
+    assert "--tier coco is not supported on azure; supported tiers: base, virt, ai." in caplog.text
+    assert not (tmp_path / "cc7").exists()
+
+
+def test_aws_help_lists_coco_and_podvm_instance_type(capsys):
+    with pytest.raises(SystemExit) as exc:
+        main(["aws", "--help"])
+    assert exc.value.code == 0
+    out = capsys.readouterr().out
+    assert "--tier {base,virt,ai,coco}" in out
+    assert "--podvm-instance-type" in out
+
+
+def test_sev_snp_lists_match_the_aws_user_guide():
+    """Shared-tenancy SEV-SNP support read from the AWS EC2 User Guide on 2026-11-12; the README states the same lists."""
+    assert SEV_SNP_REGIONS == {"us-east-2", "eu-west-1"}
+    assert len(SEV_SNP_INSTANCE_TYPES) == 16
+    assert {t.split(".")[0] for t in SEV_SNP_INSTANCE_TYPES} == {"m6a", "c6a", "r6a"}
+    assert DEFAULT_PODVM_INSTANCE_TYPE in SEV_SNP_INSTANCE_TYPES
+
+
+@needs_kustomize
+@pytest.mark.parametrize("topology", ["standard", "compact", "sno"])
+def test_coco_overlay_builds_with_the_peer_pods_credential(topology, tmp_path, caplog):
+    """Repository templates: the rendered overlay has the four peer-pods resources and passes validation."""
+    caplog.set_level(logging.INFO, logger="scaffold")
+    name = f"v-{topology}"
+    assert main([*_validate_args(tmp_path, "aws", topology, REPO_TEMPLATES), "--tier", pol.TIER_COCO]) == 0
+    built = subprocess.run(["kustomize", "build", str(tmp_path / "out" / name / "crossplane")],
+                           capture_output=True, text=True, check=True)
+    by_kind = {(d["kind"], d["metadata"]["name"]): d for d in yaml.safe_load_all(built.stdout) if d}
+    base = f"{name}-{pol.PEER_PODS.key}"
+    peer_pods = {kind: by_kind[(kind, resource)] for kind, resource in (
+        ("User", base), ("Policy", f"{base}-policy"),
+        ("UserPolicyAttachment", f"{base}-attachment"), ("AccessKey", f"{base}-access-key"))}
+    for doc in peer_pods.values():
+        assert doc["metadata"]["labels"][CLUSTER_LABEL] == name
+        assert doc["metadata"]["namespace"] == name
+    assert peer_pods["Policy"]["spec"]["forProvider"]["policy"] == pol.render(
+        pol.component_policy(pol.PEER_PODS.key, name, "us-east-2", "openshiftpartnerlabs.com"))
+    assert peer_pods["AccessKey"]["metadata"]["annotations"] == {
+        ANNOTATION_CREDENTIALS_REQUEST: "openshift-sandboxed-containers-aws",
+        ANNOTATION_TARGET_NAMESPACE: "openshift-sandboxed-containers-operator",
+        ANNOTATION_TARGET_SECRET: "peer-pods-secret",
+        ANNOTATION_DELIVERY: "post-provision",
+    }
+    assert peer_pods["AccessKey"]["spec"]["writeConnectionSecretToRef"] == {
+        "name": f"{base}-credentials-raw", "namespace": name}
+    assert f"Release check: 6 CredentialsRequests from {RELEASE_IMAGE} covered by the scoped policies." in caplog.text

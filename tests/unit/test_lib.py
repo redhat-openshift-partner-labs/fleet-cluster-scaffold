@@ -535,6 +535,21 @@ class TestGenerateMetadata:
         assert result["htpasswd-provider-name"] == "Acme Corp"
         assert result["ai-accelerator"] == "none"
 
+    def test_coco_adds_the_default_podvm_instance_type(self):
+        params = ClusterParams(name="m", region="us-east-2", tier=pol.TIER_COCO)
+        assert yaml.safe_load(generate_metadata(params)) == {
+            "platform": "aws", "aws-credentials-mode": "scoped", "podvm-instance-type": "m6a.large"}
+
+    def test_coco_records_the_requested_podvm_instance_type(self):
+        params = ClusterParams(name="m", region="us-east-2", tier=pol.TIER_COCO,
+                               provider_options={"podvm_instance_type": "c6a.2xlarge"})
+        assert yaml.safe_load(generate_metadata(params))["podvm-instance-type"] == "c6a.2xlarge"
+
+    @pytest.mark.parametrize("tier", ["base", "virt", "ai"])
+    def test_other_tiers_have_no_podvm_instance_type(self, tier):
+        params = ClusterParams(name="m", region="us-east-2", tier=tier)
+        assert "podvm-instance-type" not in yaml.safe_load(generate_metadata(params))
+
 
 class TestWriteClusterDirMetadata:
     def test_metadata_file_exists(self, params, tmp_path):
