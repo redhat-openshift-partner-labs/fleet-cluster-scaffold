@@ -270,7 +270,7 @@ class AWSProvider(Provider):
             add("AccessKey", p_key, f"patches/{group}/access-key.yaml", key_ops)
 
         # Installer keeps the legacy resource names so existing pipeline tasks keep working
-        user_set("installer", _INSTALLER_PLACEHOLDERS, _installer_names(n), pol.installer_policy(n))
+        user_set("installer", _INSTALLER_PLACEHOLDERS, _installer_names(n), pol.installer_policy(n, params.tier))
 
         for role, doc in (("master", pol.master_role_policy(n, region, domain)), ("worker", pol.worker_role_policy())):
             add("Role", f"cluster-placeholder-{role}-role", f"patches/node-roles/{role}-role.yaml",
@@ -298,4 +298,13 @@ class AWSProvider(Provider):
                 secret=f"{base}-credentials-raw",
                 annotations=annotations,
             )
+
+        if params.tier in pol.TIER_COMPONENTS:
+            # ec2 ImportSnapshot service role; the fleet pipeline builds the cluster's pod VM image with it
+            add("Role", "cluster-placeholder-vmimport-role", "patches/podvm-image/vmimport-role.yaml",
+                rename_ops(f"{n}{pol.VMIMPORT_ROLE_SUFFIX}", n) + [
+                    tag_op,
+                    replace("/spec/forProvider/inlinePolicy/0/name", f"{n}-vmimport-policy"),
+                    replace("/spec/forProvider/inlinePolicy/0/policy", pol.render(pol.vmimport_role_policy(n))),
+                ])
         return entries, files

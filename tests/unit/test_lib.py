@@ -309,24 +309,28 @@ def _patch_targets(patches) -> set[tuple[str, str]]:
 
 
 class TestCocoCrossplanePatches:
-    """Tier coco adds the peer-pods User, Policy, UserPolicyAttachment and AccessKey to the scoped overlay."""
+    """Tier coco adds the peer-pods User, Policy, UserPolicyAttachment and AccessKey and the import Role to the scoped overlay."""
 
     KEY = pol.PEER_PODS.key
     PLACEHOLDER = f"cluster-placeholder-{KEY}"
 
-    def test_adds_the_four_peer_pods_patches(self):
+    def test_adds_the_peer_pods_and_import_role_patches(self):
         coco = generate_crossplane_patches(_tier_params(pol.TIER_COCO))
         base = generate_crossplane_patches(_tier_params("base"))
         assert set(coco) - set(base) == {
-            f"patches/{self.KEY}/{f}.yaml" for f in ("user", "policy", "attachment", "access-key")}
+            *(f"patches/{self.KEY}/{f}.yaml" for f in ("user", "policy", "attachment", "access-key")),
+            "patches/podvm-image/vmimport-role.yaml"}
         assert _patch_targets(coco) - _patch_targets(base) == {
             ("User", self.PLACEHOLDER),
             ("Policy", f"{self.PLACEHOLDER}-policy"),
             ("UserPolicyAttachment", f"{self.PLACEHOLDER}-attachment"),
             ("AccessKey", f"{self.PLACEHOLDER}-access-key"),
+            ("Role", "cluster-placeholder-vmimport-role"),
         }
-        # The installer, node-role and operator patches are the base tier's
-        assert all(coco[path] == base[path] for path in base if path != "kustomization.yaml")
+        # The node-role and operator patches are the base tier's; the installer policy gains PassVMImportRole
+        changed = {"kustomization.yaml", "patches/installer/policy.yaml"}
+        assert all(coco[path] == base[path] for path in base if path not in changed)
+        assert coco["patches/installer/policy.yaml"] != base["patches/installer/policy.yaml"]
 
     @pytest.mark.parametrize("file,name", [
         ("user", "my-cluster-peer-pods"),
@@ -869,7 +873,7 @@ class TestScopedTemplatesMatchPatches:
         assert targets <= _template_resources(os.path.join(REPO_TEMPLATES, "aws", topology, "crossplane"))
 
     @pytest.mark.parametrize("topology", ["standard", "compact", "sno"])
-    def test_coco_patch_targets_are_the_scoped_base_plus_peer_pods(self, topology):
+    def test_coco_patch_targets_are_the_scoped_base_plus_peer_pods_and_the_import_role(self, topology):
         p = ClusterParams(name="t1", region="us-east-2", tier=pol.TIER_COCO, topology=topology)
         scoped = _template_resources(os.path.join(REPO_TEMPLATES, "aws", topology, "crossplane-scoped"))
         coco = _template_resources(os.path.join(REPO_TEMPLATES, "aws", topology, "crossplane-scoped-coco"))
@@ -881,6 +885,7 @@ class TestScopedTemplatesMatchPatches:
             ("Policy", f"{placeholder}-policy"),
             ("UserPolicyAttachment", f"{placeholder}-attachment"),
             ("AccessKey", f"{placeholder}-access-key"),
+            ("Role", "cluster-placeholder-vmimport-role"),
         }
 
     def test_coco_bases_are_identical_across_topologies(self):
@@ -888,5 +893,5 @@ class TestScopedTemplatesMatchPatches:
             base = pathlib.Path(REPO_TEMPLATES, "aws", topology, "crossplane-scoped-coco")
             return {f.name: f.read_bytes() for f in base.iterdir()}
 
-        assert set(files("standard")) == {"kustomization.yaml", "component-peer-pods.yaml"}
+        assert set(files("standard")) == {"kustomization.yaml", "component-peer-pods.yaml", "vmimport-role.yaml"}
         assert files("standard") == files("compact") == files("sno")

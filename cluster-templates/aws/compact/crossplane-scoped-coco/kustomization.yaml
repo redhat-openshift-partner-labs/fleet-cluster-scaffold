@@ -4,3 +4,4 @@ kind: Kustomization
 resources:
   - ../crossplane-scoped
   - component-peer-pods.yaml
+  - vmimport-role.yaml

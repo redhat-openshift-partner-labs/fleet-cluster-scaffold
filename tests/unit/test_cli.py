@@ -953,3 +953,101 @@ def test_coco_overlay_builds_with_the_peer_pods_credential(topology, tmp_path, c
     assert peer_pods["AccessKey"]["spec"]["writeConnectionSecretToRef"] == {
         "name": f"{base}-credentials-raw", "namespace": name}
     assert f"Release check: 6 CredentialsRequests from {RELEASE_IMAGE} covered by the scoped policies." in caplog.text
+
+
+# ======== coco tier: pod VM image import role ========
+
+VMIMPORT_PATCH = Path("crossplane") / "patches" / "podvm-image" / "vmimport-role.yaml"
+DENY_ALL = '{"Version":"2012-10-17","Statement":[{"Effect":"Deny","Action":"*","Resource":"*"}]}'
+
+
+def _installer_policy_patch(cluster_dir):
+    """The policy document the overlay writes into the installer Policy."""
+    ops = yaml.safe_load((cluster_dir / "crossplane" / "patches" / "installer" / "policy.yaml").read_text())
+    (op,) = [o for o in ops if o["path"] == "/spec/forProvider/policy"]
+    return op["value"]
+
+
+def test_coco_scaffolds_the_import_role_patch(tmp_path):
+    assert main(_coco_args(tmp_path, "cc7")) == 0
+    ops = yaml.safe_load((tmp_path / "cc7" / VMIMPORT_PATCH).read_text())
+    assert ops == [
+        {"op": "replace", "path": "/metadata/name", "value": "cc7-vmimport-role"},
+        {"op": "replace", "path": "/metadata/namespace", "value": "cc7"},
+        {"op": "replace", "path": "/spec/forProvider/tags/openshiftpartnerlabs.com~1cluster", "value": "cc7"},
+        {"op": "replace", "path": "/spec/forProvider/inlinePolicy/0/name", "value": "cc7-vmimport-policy"},
+        {"op": "replace", "path": "/spec/forProvider/inlinePolicy/0/policy",
+         "value": pol.render(pol.vmimport_role_policy("cc7"))},
+    ]
+    kust = yaml.safe_load((tmp_path / "cc7" / "crossplane" / "kustomization.yaml").read_text())
+    assert {"target": {"kind": "Role", "name": "cluster-placeholder-vmimport-role"},
+            "path": "patches/podvm-image/vmimport-role.yaml"} in kust["patches"]
+
+
+def test_coco_installer_policy_passes_the_import_role(tmp_path):
+    assert main(_coco_args(tmp_path, "cc8")) == 0
+    assert _installer_policy_patch(tmp_path / "cc8") == pol.render(pol.installer_policy("cc8", pol.TIER_COCO))
+    assert '"Sid":"PassVMImportRole"' in _installer_policy_patch(tmp_path / "cc8")
+
+
+@pytest.mark.parametrize("tier", TIERS)
+def test_other_tiers_have_no_import_role(tier, tmp_path):
+    """base, virt and ai: no Role patch, and the installer policy is the one rendered without a tier."""
+    name = f"nv-{tier}"
+    assert main(_aws_args(tmp_path, name, "--tier", tier)) == 0
+    cluster = tmp_path / name
+    assert not (cluster / VMIMPORT_PATCH).parent.exists()
+    assert "vmimport" not in (cluster / "crossplane" / "kustomization.yaml").read_text()
+    assert _installer_policy_patch(cluster) == pol.render(pol.installer_policy(name))
+    assert "PassVMImportRole" not in _installer_policy_patch(cluster)
+
+
+def test_import_role_templates_are_identical_placeholders():
+    """One Role per coco base: the import trust policy, a deny-all inline policy and the placeholder names."""
+    texts = {topology: Path(REPO_TEMPLATES, "aws", topology, "crossplane-scoped-coco", "vmimport-role.yaml").read_text()
+             for topology in ("standard", "compact", "sno")}
+    assert texts["standard"] == texts["compact"] == texts["sno"]
+    (role,) = [d for d in yaml.safe_load_all(texts["standard"]) if d]
+    assert (role["kind"], role["metadata"]) == (
+        "Role", {"name": "cluster-placeholder-vmimport-role", "namespace": "cluster-placeholder"})
+    assert role["spec"] == {
+        "forProvider": {
+            "assumeRolePolicy": pol.render(pol.VMIMPORT_ASSUME_ROLE_POLICY),
+            "inlinePolicy": [{"name": "cluster-placeholder-vmimport-policy", "policy": DENY_ALL}],
+            "tags": {"Purpose": "OpenShift-PodVM-Image-Import", "CreatedBy": "Crossplane", "Product": "OpenShift",
+                     CLUSTER_LABEL: "cluster-placeholder"},
+        },
+        "providerConfigRef": {"name": "default"},
+    }
+    for topology in texts:
+        kust = yaml.safe_load(Path(REPO_TEMPLATES, "aws", topology, "crossplane-scoped-coco", "kustomization.yaml").read_text())
+        assert kust["resources"] == ["../crossplane-scoped", "component-peer-pods.yaml", "vmimport-role.yaml"]
+
+
+@needs_kustomize
+@pytest.mark.parametrize("topology", ["standard", "compact", "sno"])
+def test_coco_overlay_builds_with_the_import_role(topology, tmp_path):
+    """Repository templates: the rendered overlay holds the import Role and the installer may pass it."""
+    name = f"v-{topology}"
+    assert main([*_validate_args(tmp_path, "aws", topology, REPO_TEMPLATES), "--tier", pol.TIER_COCO]) == 0
+    built = subprocess.run(["kustomize", "build", str(tmp_path / "out" / name / "crossplane")],
+                           capture_output=True, text=True, check=True)
+    by_kind = {(d["kind"], d["metadata"]["name"]): d for d in yaml.safe_load_all(built.stdout) if d}
+    role = by_kind[("Role", f"{name}-vmimport-role")]
+    assert role["metadata"]["namespace"] == name
+    spec = role["spec"]["forProvider"]
+    assert spec["assumeRolePolicy"] == pol.render(pol.VMIMPORT_ASSUME_ROLE_POLICY)
+    assert spec["inlinePolicy"] == [
+        {"name": f"{name}-vmimport-policy", "policy": pol.render(pol.vmimport_role_policy(name))}]
+    assert spec["tags"][CLUSTER_LABEL] == name
+    installer = by_kind[("Policy", f"{name}-openshift4installerpolicy")]["spec"]["forProvider"]["policy"]
+    assert installer == pol.render(pol.installer_policy(name, pol.TIER_COCO))
+    assert f'"Resource":"arn:aws:iam::*:role/{name}-vmimport-role"' in installer
+
+
+@needs_kustomize
+def test_base_overlay_builds_without_the_import_role(tmp_path):
+    assert main(_validate_args(tmp_path, "aws", "standard", REPO_TEMPLATES)) == 0
+    built = subprocess.run(["kustomize", "build", str(tmp_path / "out" / "v-standard" / "crossplane")],
+                           capture_output=True, text=True, check=True)
+    assert "vmimport" not in built.stdout and "PassVMImportRole" not in built.stdout
