@@ -296,7 +296,7 @@ class Withheld:
 
 
 # CredentialsRequest actions the scoped policies deliberately omit, by request name, then action.
-# The operator gets UnauthorizedOperation if it calls one; the README lists these under residuals.
+# The operator gets UnauthorizedOperation if it calls one; docs/aws-policy-maintenance.md lists these.
 INTENTIONALLY_DROPPED: dict[str, dict[str, Withheld]] = {
     "openshift-ingress": {
         "sts:AssumeRole": Withheld(

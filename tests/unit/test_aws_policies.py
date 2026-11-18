@@ -18,7 +18,8 @@ REQUESTS = load_credentials_requests(FIXTURES)
 BY_NAME = {r.name: r for r in REQUESTS}
 # Every vendored release (aws-<minor>); the policies must cover all of them while clusters use any of them
 RELEASES = {d.name: load_credentials_requests(d) for d in sorted(FIXTURES_ROOT.glob("aws-*"))}
-README = pathlib.Path(__file__).parents[2] / "README.md"
+# Guide that documents every withheld action (reason and grant condition)
+WITHHELD_DOC = pathlib.Path(__file__).parents[2] / "docs" / "aws-policy-maintenance.md"
 
 # Mutating action verbs that must never be allowed account-wide on the spoke
 MUTATING = ("Terminate", "Delete", "Detach", "Attach", "Modify", "Revoke", "Authorize", "Deregister",
@@ -134,10 +135,10 @@ class TestCoverageGaps:
     @pytest.mark.parametrize(("request_name", "action"),
                              [(r, a) for r, actions in pol.INTENTIONALLY_DROPPED.items() for a in actions])
     def test_withheld_action_is_documented_and_not_granted(self, request_name, action):
-        """Every withheld action states its reason and enable steps, is listed in the README, and stays ungranted."""
+        """Every withheld action states its reason and enable steps, is listed in the maintenance guide, and stays ungranted."""
         entry = pol.INTENTIONALLY_DROPPED[request_name][action]
         assert entry.reason.strip() and entry.enable.strip()
-        assert f"`{action}`" in README.read_text()
+        assert f"`{action}`" in WITHHELD_DOC.read_text()
         component = next(c for c in pol.COMPONENTS if c.credentials_request == request_name)
         granted = _allowed_actions(pol.component_policy(component.key, NAME, REGION, DOMAIN))
         assert not any(fnmatch.fnmatchcase(action, g) for g in granted)
