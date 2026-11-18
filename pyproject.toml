@@ -1,6 +1,6 @@
 [project]
 name = "fleet-cluster-scaffold"
-version = "0.1.0"
+version = "1.0.0"
 description = "Standalone cluster scaffolding tool — generate OpenShift cluster overlays with Kustomize without the fleet monorepo dependency."
 requires-python = ">=3.11"
 dependencies = [
