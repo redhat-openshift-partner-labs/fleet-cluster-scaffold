@@ -375,16 +375,9 @@ The scaffold generates Azure overlays, but they must not be used for partner clu
 
 Each cluster gets its own service principal, scoped to its own resource group:
 
-```mermaid
-flowchart LR
-  RG["ResourceGroup<br/>&lt;name&gt;-rg"]
-  APP["Application<br/>&lt;name&gt;-ocp-installer"] -->|clientIdRef| SP["Principal"]
-  APP -->|applicationIdRef| PW["Password<br/>&lt;name&gt;-client-secret"]
-  PW -->|connection secret| RAW["azure-credentials-raw"]
-  SP -.->|"objectId (Tekton)"| RA["RoleAssignments<br/>(paused)"]
-  RAW -->|Tekton| CRED["azure-credentials<br/>osServicePrincipal.json"]
-  CRED --> CD["Hive ClusterDeployment"]
-```
+![Azure credential flow: Crossplane creates the ResourceGroup, Application, Principal, Password and paused RoleAssignments. The Password writes the Secret azure-credentials-raw. The Tekton pipeline copies the Principal objectId into the RoleAssignments and builds the Secret azure-credentials, which the Hive ClusterDeployment uses.](docs/diagrams/azure-credential-flow.svg)
+
+Mermaid source: [docs/diagrams/azure-credential-flow.mmd](docs/diagrams/azure-credential-flow.mmd). [docs/diagrams/README.md](docs/diagrams/README.md) describes how to edit the diagram.
 
 | RoleAssignment            | Role                        | Scope                              |
 |---------------------------|-----------------------------|------------------------------------|
