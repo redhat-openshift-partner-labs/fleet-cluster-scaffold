@@ -310,7 +310,9 @@ INTENTIONALLY_DROPPED: dict[str, dict[str, Withheld]] = {
             reason="Creates Dedicated Hosts, billed per host-hour while allocated, from the account-wide host quota.",
             enable="When partners need Dedicated Hosts and fleet teardown releases hosts: grant on dedicated-host/* "
                    "only with the ownership tag in the request (s.request_tag_any), and add AllocateHosts to "
-                   "TagOnLaunch's ec2:CreateAction. First confirm machine-api tags the hosts it allocates.",
+                   "TagOnLaunch's ec2:CreateAction. machine-api in OCP 4.22.22 and 5.0.1 sends the ownership tag in "
+                   "the AllocateHosts request (buildTagList in machine-api-provider-aws "
+                   "pkg/actuators/machine/instances.go adds the Infrastructure resource tags, set from userTags).",
         ),
         "ec2:ReleaseHosts": Withheld(
             reason="Only needed together with ec2:AllocateHosts.",
