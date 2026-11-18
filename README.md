@@ -205,6 +205,10 @@ IAM patterns match the infra ID as `<prefix>-?????`: `<prefix>` is the name cut 
 
 **Rolling out a policy change.** The base holds deny-all placeholders. The rendered policies are written into each overlay (`crossplane/patches/<operator>/policy.yaml`, `crossplane/patches/node-roles/`). A change to `aws_policies.py` therefore reaches an existing cluster only when its overlay is regenerated with `--force` (using the original flags) and re-applied. For an installed cluster, the re-apply must also re-bind the placeholders of [pipeline step 3](#aws-fleet-pipeline-contract). Otherwise its operators lose the cluster-tag and VPC grants (fail closed).
 
+![AWS scoped credential flow: on the hub, Crossplane creates the installer user, six operator users and the node roles of one cluster. The operator AccessKeys write one key Secret per operator, and the pipeline builds the manifests Secret from them. The Hive ClusterDeployment reads the installer Secret and the manifests Secret, and the install creates one Secret per operator on the spoke. The spoke nodes use the node roles.](docs/diagrams/aws-credential-flow.svg)
+
+Mermaid source: [docs/diagrams/aws-credential-flow.mmd](docs/diagrams/aws-credential-flow.mmd). [docs/diagrams/README.md](docs/diagrams/README.md) describes how to edit the diagram.
+
 #### AWS fleet pipeline contract
 
 The fleet pipeline runs these steps for an overlay whose `metadata.yaml` has `aws-credentials-mode: scoped`:
