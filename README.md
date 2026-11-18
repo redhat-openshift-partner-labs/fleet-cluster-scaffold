@@ -100,9 +100,24 @@ fleet-scaffold-cluster azure --name my-cluster --region eastus2 --tier base \
   --subscription-id 00000000-0000-0000-0000-000000000000
 ```
 
-This creates `./my-cluster/` with the full Kustomize overlay structure and validates it with `kustomize build`. Validation also fails if any base-template name (`cluster-placeholder*`, `subscription-placeholder`) survives the build. That means a patch matched nothing, usually because `--cluster-templates-dir` points at stale templates; kustomize itself does not report this. The pipeline-bound placeholders (`INFRA_ID_PLACEHOLDER`, `VPC_ID_PLACEHOLDER`, `principal-id-placeholder`) are expected.
+The AWS command creates `./my-cluster/` (see [Generated output](#generated-output)), exits `0` and prints:
 
-For AWS clusters with scoped credentials (the default) the scaffold then verifies the operator policies against the CredentialsRequests of the release behind `--image-set`; this needs `oc`, access to `quay.io`, and about 20 seconds. See [Release check](#release-check).
+```text
+Scaffolding aws/standard cluster 'my-cluster' in ./
+  -> wrote ./my-cluster
+  -> hive: OK
+  -> crossplane: OK
+  -> release check:
+  -> -> extracting CredentialsRequests from quay.io/openshift-release-dev/ocp-release:4.21.13-x86_64
+  -> -> (oc adm release extract, up to 300s)
+  -> -> Release check: 6 CredentialsRequests from quay.io/openshift-release-dev/ocp-release:4.21.13-x86_64 covered by the scoped policies.
+  -> -> Cluster 'my-cluster' scaffolded successfully
+```
+
+| Output lines | Step | Details |
+|---|---|---|
+| `hive: OK`, `crossplane: OK` | `kustomize build` of each subdirectory | [Validation](#validation) |
+| `release check:` and the lines after it | For AWS clusters with scoped credentials (the default): the operator policies are verified against the CredentialsRequests of the release behind `--image-set`. This needs `oc`, access to `quay.io`, and about 20 seconds. | [Release check](#release-check) |
 
 ## Command reference
 
@@ -231,7 +246,8 @@ Also on the hub:
 - the fleet pipeline ClusterRole needs `iam.aws.upbound.io` `roles`;
 - `pipeline-image` must be pinned to a release that contains the scoped-credential tasks.
 
-This identity can create IAM policies and roles, which is account-admin-equivalent. Treat `crossplane-system/aws-credentials` as one of the hub's most sensitive secrets.
+> [!IMPORTANT]
+> The hub's Crossplane AWS identity can create IAM policies and roles, which is account-admin-equivalent. Treat `crossplane-system/aws-credentials` as one of the hub's most sensitive secrets.
 
 #### AWS limits and residuals
 
@@ -304,7 +320,10 @@ The release check does not report when a later EBS CSI driver starts calling `ec
 
 #### AWS legacy Mint mode (rollback only)
 
-`--legacy-mint-credentials` generates the previous Mint-mode overlay: the account-admin installer policy, with the key stored on the spoke. It exists only as a rollback while the scoped workflow is validated, and prints a warning.
+> [!WARNING]
+> Use `--legacy-mint-credentials` only to roll back while the scoped workflow is validated. The account-admin installer key is stored on the spoke, where a partner with cluster-admin can read it.
+
+`--legacy-mint-credentials` generates the previous Mint-mode overlay: the account-admin installer policy, with the key stored on the spoke. The command prints a warning.
 
 #### Why ccoctl is not used
 
@@ -321,6 +340,9 @@ Costs of the current design:
 - The custom policies are outside Red Hat's tested configuration; see [AWS limits and residuals](#aws-limits-and-residuals).
 
 ### Azure
+
+> [!WARNING]
+> Do not use Azure overlays for partner clusters. The installer credentials reach the spoke, where a partner with cluster-admin can change other clusters' DNS records. See [Azure status](#azure-status).
 
 | Flag                           | Default             | Description                                              |
 |--------------------------------|---------------------|----------------------------------------------------------|
@@ -442,6 +464,8 @@ cluster-templates/
 ## Validation
 
 By default the tool runs `kustomize build` on both the `hive/` and `crossplane/` subdirectories after scaffolding. If validation fails the tool exits with code 1 and prints the kustomize error. Use `--skip-validation` to bypass this step (e.g. when kustomize is not installed or the cluster-templates bases are not present locally).
+
+Validation also fails if any base-template name (`cluster-placeholder*`, `subscription-placeholder`) survives the build. That means a patch matched nothing, usually because `--cluster-templates-dir` points at stale templates; kustomize itself does not report this. The pipeline-bound placeholders (`INFRA_ID_PLACEHOLDER`, `VPC_ID_PLACEHOLDER`, `principal-id-placeholder`) are expected.
 
 If the target cluster directory already exists, the tool refuses to overwrite it unless `--force` is passed.
 
