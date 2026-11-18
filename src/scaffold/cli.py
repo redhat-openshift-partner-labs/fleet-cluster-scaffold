@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from importlib import metadata
 
 from scaffold import release
 from scaffold.lib import (
@@ -30,6 +31,19 @@ from scaffold.providers import PROVIDERS
 from scaffold.providers.base import Provider
 
 _LOG = logging.getLogger("scaffold")
+
+DISTRIBUTION = "fleet-cluster-scaffold"  # [project].name in pyproject.toml
+
+
+def installed_version() -> str:
+    """Version of the installed distribution; 'unknown' when the source tree runs without being installed.
+
+    Read from the installed metadata, so an editable install reports the version it was installed with.
+    """
+    try:
+        return metadata.version(DISTRIBUTION)
+    except metadata.PackageNotFoundError:
+        return "unknown"
 
 
 def check_kustomize() -> bool:
@@ -120,6 +134,8 @@ def _common_parser() -> argparse.ArgumentParser:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="fleet-scaffold-cluster", description="Scaffold a new cluster overlay")
+    # Exits 0 during parsing, before the required CLOUD subcommand is checked
+    parser.add_argument("--version", action="version", version=f"%(prog)s {installed_version()}")
     sub = parser.add_subparsers(dest="cloud", required=True, metavar="CLOUD")
     common = _common_parser()
 

@@ -55,7 +55,15 @@ Every generated resource carries the label `openshiftpartnerlabs.com/cluster=<na
 pip install .
 ```
 
-This installs the `fleet-scaffold-cluster` command.
+This installs the `fleet-scaffold-cluster` command. `pip install .` installs a copy of the source, so run it again after pulling changes.
+
+Print the installed version:
+
+```bash
+fleet-scaffold-cluster --version
+```
+
+Expected output: `fleet-scaffold-cluster <version>`, where `<version>` is the `version` in `pyproject.toml` at install time. An editable install (`pip install -e .`) keeps reporting the version it was installed with until it is reinstalled.
 
 ### Quick start
 
@@ -78,9 +86,10 @@ For AWS clusters with scoped credentials (the default) the scaffold then verifie
 
 ```
 fleet-scaffold-cluster CLOUD --name NAME --region REGION --tier TIER [options]
+fleet-scaffold-cluster --version
 ```
 
-Run `fleet-scaffold-cluster CLOUD --help` for the full flag list of a cloud.
+Run `fleet-scaffold-cluster CLOUD --help` for the full flag list of a cloud. `--version` prints the installed version and exits `0`; it takes no `CLOUD`.
 
 ### Common arguments (all clouds)
 
