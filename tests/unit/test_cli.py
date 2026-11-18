@@ -1,6 +1,7 @@
 import logging
 import os
 import shutil
+from importlib import metadata
 from pathlib import Path
 import subprocess
 from unittest import mock
@@ -410,6 +411,27 @@ def test_planned_provider_not_supported(cloud, tmp_path):
 def test_unknown_flag_rejected_for_implemented_provider(default_args):
     with pytest.raises(SystemExit):
         main(default_args + ["--skip-validation", "--bogus"])
+
+
+# ======== Version flag tests ========
+
+
+def test_version_flag_prints_installed_version(capsys):
+    """--version needs no CLOUD subcommand and exits 0."""
+    with pytest.raises(SystemExit) as exc:
+        main(["--version"])
+    assert exc.value.code == 0
+    assert capsys.readouterr().out == f"fleet-scaffold-cluster {metadata.version('fleet-cluster-scaffold')}\n"
+
+
+def test_version_flag_without_installed_distribution(capsys):
+    """A source tree run without an installed distribution reports 'unknown' and still parses."""
+    with mock.patch("scaffold.cli.metadata.version", side_effect=metadata.PackageNotFoundError):
+        with pytest.raises(SystemExit) as exc:
+            main(["--version"])
+        assert main(["gcp", "--name", "x"]) == 1  # the parser still builds for other invocations
+    assert exc.value.code == 0
+    assert capsys.readouterr().out == "fleet-scaffold-cluster unknown\n"
 
 
 # ======== Topology tests ========
