@@ -3,7 +3,7 @@
 [![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)](#requirements)
 [![Kustomize](https://img.shields.io/badge/Kustomize-required-326CE5?logo=kubernetes&logoColor=white)](#requirements)
 [![AWS](https://img.shields.io/badge/AWS-supported-232F3E?logo=amazonwebservices&logoColor=white)](#aws)
-[![Azure](https://img.shields.io/badge/Azure-not%20ready-0078D4?logo=microsoftazure&logoColor=white)](#azure-status)
+[![Azure](https://img.shields.io/badge/Azure-not%20ready-0078D4?logo=microsoftazure&logoColor=white)](docs/azure.md#azure-status)
 
 `fleet-cluster-scaffold` is a command-line tool that generates the Kustomize overlay directory for one OpenShift cluster on AWS or Azure, for engineers who provision clusters through the fleet pipelines. The overlay holds the Hive and Crossplane resources for the cluster. The tool runs without the fleet monorepo.
 
@@ -19,19 +19,8 @@
   - [Command syntax](#command-syntax)
   - [Common arguments (all clouds)](#common-arguments-all-clouds)
 - [Provider guides](#provider-guides)
-  - [AWS](#aws)
-    - [AWS credentials: cluster-scoped (default)](#aws-credentials-cluster-scoped-default)
-    - [AWS fleet pipeline contract](#aws-fleet-pipeline-contract)
-    - [AWS hub prerequisites (scoped clusters)](#aws-hub-prerequisites-scoped-clusters)
-    - [AWS limits and residuals](#aws-limits-and-residuals)
-    - [AWS OCP minor upgrade procedure](#aws-ocp-minor-upgrade-procedure)
-    - [AWS withheld operator actions](#aws-withheld-operator-actions)
-    - [AWS legacy Mint mode (rollback only)](#aws-legacy-mint-mode-rollback-only)
-    - [Why ccoctl is not used](#why-ccoctl-is-not-used)
-  - [Azure](#azure)
-    - [Azure status](#azure-status)
-    - [Azure credential flow](#azure-credential-flow)
-    - [Azure hub prerequisites](#azure-hub-prerequisites)
+  - [AWS](#aws): flags and example. Guides: [docs/aws.md](docs/aws.md), [docs/aws-policy-maintenance.md](docs/aws-policy-maintenance.md)
+  - [Azure](#azure): flags and example. Guide: [docs/azure.md](docs/azure.md)
 - [Generated output](#generated-output)
 - [Templates and extension](#templates-and-extension)
   - [Cluster templates](#cluster-templates)
@@ -61,7 +50,7 @@ Every generated resource carries the label `openshiftpartnerlabs.com/cluster=<na
 | Cloud      | Status       | Notes |
 |------------|--------------|-------|
 | `aws`      | Supported    | Cluster-scoped IAM workflow |
-| `azure`    | Not ready    | Overlay generation only; see [Azure status](#azure-status) |
+| `azure`    | Not ready    | Overlay generation only; see [Azure status](docs/azure.md#azure-status) |
 | `gcp`      | Planned      | Command exits `1` |
 | `ibmcloud` | Planned      | Command exits `1` |
 
@@ -166,7 +155,7 @@ Run `fleet-scaffold-cluster CLOUD --help` for the full flag list of a cloud. `--
 | `--control-plane-type`      | `m7i.4xlarge`            |
 | `--worker-type`             | `m7i.2xlarge`            |
 | `--zones`                   | `<region>a,b,c`          |
-| `--legacy-mint-credentials` | off (rollback only; see [AWS legacy Mint mode](#aws-legacy-mint-mode-rollback-only)) |
+| `--legacy-mint-credentials` | off (rollback only; see [AWS legacy Mint mode](docs/aws.md#aws-legacy-mint-mode-rollback-only)) |
 
 ```bash
 fleet-scaffold-cluster aws \
@@ -182,171 +171,17 @@ fleet-scaffold-cluster aws \
   --htpasswd-provider-name "Acme Corp"
 ```
 
-#### AWS credentials: cluster-scoped (default)
+New AWS clusters use cluster-scoped credentials: `credentialsMode: Manual`, one IAM user per OpenShift operator, and BYO node roles. No credential that reaches a spoke may act on another cluster's resources.
 
-Partners get cluster-admin, and all clusters share one AWS account. So no credential that reaches a spoke may act on another cluster's resources. New AWS clusters therefore use:
-
-- **`credentialsMode: Manual`**: the installer key is never copied to the spoke (no `kube-system/aws-creds`).
-- **Ownership tag** `openshiftpartnerlabs.com/cluster=<name>`, set via install-config `userTags` and `propagateUserTags`, so the installer and the operators tag what they create.
-- **One IAM user per OpenShift operator** (machine-api, image-registry, ingress, ebs-csi, cloud-network-config-controller, cloud-credential-operator read-only). Each policy is derived from the operator's CredentialsRequest, is checked against the OCP 4.21 and 5.0 requests in `tests/fixtures/credentialsrequests/`, and is limited to the cluster:
-  - instances by the cluster's exact instance profiles `<infraID>-{master,worker}-profile`;
-  - volumes, snapshots, security groups and load balancers by the ownership tag (settable only at create time);
-  - instance launches only from snapshots owned by another account (the RHCOS AMI's, owned by Red Hat), never from this account's snapshots, which hold other clusters' PV and VM data;
-  - S3 by the registry bucket `<infraID>-image-registry-*`;
-  - IAM reads (cloud-credential-operator) by the cluster's exact operator users;
-  - Route53 by `*.apps.<name>.<domain>`;
-  - `iam:PassRole` by the cluster's own node roles.
-- **BYO node roles** `<name>-{master,worker}-role` (install-config `iamRole`) with scoped policies. The AWS cloud-controller-manager runs on the master role.
-- **Installer user** without `iam:*`: its IAM rights are limited to the cluster's two node roles and the instance profiles named after its infra ID. It stays on the hub, where cert-manager also uses it for Route53 DNS-01.
-
-Policies are generated by `src/scaffold/providers/aws_policies.py`. The base is `cluster-templates/aws/<topology>/crossplane-scoped/`.
-
-IAM patterns match the infra ID as `<prefix>-?????`: `<prefix>` is the name cut to 21 characters (the installer's rule, `infra_prefix()`), and `?` matches exactly one of the installer's 5 random characters. So `acme` never matches `acme-2`'s resources.
-
-**Rolling out a policy change.** The base holds deny-all placeholders. The rendered policies are written into each overlay (`crossplane/patches/<operator>/policy.yaml`, `crossplane/patches/node-roles/`). A change to `aws_policies.py` therefore reaches an existing cluster only when its overlay is regenerated with `--force` (using the original flags) and re-applied. For an installed cluster, the re-apply must also re-bind the placeholders of [pipeline step 3](#aws-fleet-pipeline-contract). Otherwise its operators lose the cluster-tag and VPC grants (fail closed).
-
-![AWS scoped credential flow: on the hub, Crossplane creates the installer user, six operator users and the node roles of one cluster. The operator AccessKeys write one key Secret per operator, and the pipeline builds the manifests Secret from them. The Hive ClusterDeployment reads the installer Secret and the manifests Secret, and the install creates one Secret per operator on the spoke. The spoke nodes use the node roles.](docs/diagrams/aws-credential-flow.svg)
-
-Mermaid source: [docs/diagrams/aws-credential-flow.mmd](docs/diagrams/aws-credential-flow.mmd). [docs/diagrams/README.md](docs/diagrams/README.md) describes how to edit the diagram.
-
-#### AWS fleet pipeline contract
-
-The fleet pipeline runs these steps for an overlay whose `metadata.yaml` has `aws-credentials-mode: scoped`:
-
-1. Wait for the Secrets `<name>-<operator>-credentials-raw` (keys `username`/`password`) written by the Crossplane AccessKeys.
-2. Build Secret `<name>-cloud-credentials-manifests`. It holds one Secret manifest per operator, each with `aws_access_key_id`/`aws_secret_access_key` for that operator's target namespace and name (see `COMPONENTS` in `aws_policies.py`). The ClusterDeployment references it as `spec.provisioning.manifestsSecretRef`.
-
-   Each operator AccessKey carries the annotations `openshiftpartnerlabs.com/credentials-request`, `openshiftpartnerlabs.com/target-namespace` and `openshiftpartnerlabs.com/target-secret`, with the values from `COMPONENTS`. The installer AccessKey `<name>-access-key` carries none of them, which is how a consumer tells the two apart. A pipeline image that reads the annotations needs no copy of the operator list; that fleet change is tracked separately.
-3. After Hive reports the cluster installed (before handoff), substitute `INFRA_ID_PLACEHOLDER` with `ClusterDeployment.spec.clusterMetadata.infraID`, and `VPC_ID_PLACEHOLDER` with the cluster VPC ID, in the cluster's Crossplane Policies and Roles. Until then the placeholders match nothing (fail closed). Afterwards:
-   - resources tagged only `kubernetes.io/cluster/<infraID>=owned` are also treated as owned. machine-api, EBS CSI and the cloud-controller-manager always apply that tag at create time, so partner `LoadBalancer` Services work without annotations.
-   - egress-IP ENI changes are limited to the cluster VPC.
-4. Pre-provision waits until all of the cluster's Crossplane IAM resources report `Ready` before provisioning.
-
-#### AWS hub prerequisites (scoped clusters)
-
-The hub's Crossplane AWS identity (`crossplane-system/aws-credentials`, ProviderConfig `default`) creates, updates and deletes each cluster's IAM resources. On top of the user, policy and access-key permissions legacy clusters already need, scoped clusters require:
-
-| Purpose | IAM actions |
-|---|---|
-| BYO node roles: create, tag, inline policy, delete | `iam:CreateRole`, `iam:GetRole`, `iam:DeleteRole`, `iam:UpdateRole`, `iam:UpdateAssumeRolePolicy`, `iam:TagRole`, `iam:UntagRole`, `iam:ListRoleTags`, `iam:PutRolePolicy`, `iam:GetRolePolicy`, `iam:DeleteRolePolicy`, `iam:ListRolePolicies`, `iam:ListAttachedRolePolicies`, `iam:ListInstanceProfilesForRole` |
-| Post-install policy updates (`scope-aws-credentials` changes the operator policies; Crossplane applies that as a new policy version and prunes old ones) | `iam:CreatePolicyVersion`, `iam:DeletePolicyVersion`, `iam:ListPolicyVersions`, `iam:GetPolicyVersion` |
-
-Check before provisioning. The output should be empty:
-
-```bash
-aws iam simulate-principal-policy --policy-source-arn <hub-crossplane-identity-arn> \
-  --action-names iam:CreateRole iam:GetRole iam:DeleteRole iam:UpdateRole iam:UpdateAssumeRolePolicy \
-    iam:TagRole iam:UntagRole iam:ListRoleTags iam:PutRolePolicy iam:GetRolePolicy iam:DeleteRolePolicy \
-    iam:ListRolePolicies iam:ListAttachedRolePolicies iam:ListInstanceProfilesForRole \
-    iam:CreatePolicyVersion iam:DeletePolicyVersion iam:ListPolicyVersions iam:GetPolicyVersion \
-  --query 'EvaluationResults[?EvalDecision!=`allowed`].EvalActionName'
-```
-
-Symptoms when these are missing:
-- **Role permissions:** pre-provision times out listing `role.iam/<name>-{master,worker}-role` with an `AccessDenied` message. Before the readiness wait existed, the installer failed instead with `TagRole … NoSuchEntity`.
-- **Policy-version permissions:** `scope-aws-credentials` succeeds, but the operator `Policy` resources report `Synced=False`, and AWS keeps the placeholder version (fail closed). Partner LoadBalancers and egress IPs then stay denied.
-
-Also on the hub:
-- the fleet pipeline ClusterRole needs `iam.aws.upbound.io` `roles`;
-- `pipeline-image` must be pinned to a release that contains the scoped-credential tasks.
-
-> [!IMPORTANT]
-> The hub's Crossplane AWS identity can create IAM policies and roles, which is account-admin-equivalent. Treat `crossplane-system/aws-credentials` as one of the hub's most sensitive secrets.
-
-#### AWS limits and residuals
-
-- Cluster names can be at most 49 characters (IAM names `<name>-<operator>` are capped at 64).
-- **Infra prefixes must be unique among clusters with AWS resources (enforced outside the scaffold).** Two names that are identical in the first 21 characters share `<prefix>-?????`. Each cluster's credentials can then act on the other's instances, registry bucket and instance profiles. The scaffold cannot see other clusters. The fleet trigger (before pre-provision) and the fleet-clusters PR check must reject such a name. Count every cluster whose AWS resources may still exist, including archived ones and those with stuck IAM.
-- **Account-wide reads.** The stock CredentialsRequests need these on `*`, and EC2 `Describe*` calls cannot be scoped by resource. So every spoke can list every cluster's instances, volumes, snapshots, security groups, load balancers and hosted zones, plus every tagged resource in the account. The relevant actions: `ec2:Describe*`, `elasticloadbalancing:Describe*`, `route53:ListHostedZones`, `tag:GetResources`. Spokes can read this inventory but not change it.
-- **The snapshot check fails closed.** It requires the `ec2:Owner` key. If EC2 stops sending it, or install-config points at an AMI copied into this account, machine-api launches fail with `UnauthorizedOperation`.
-- Between install and [pipeline step 3](#aws-fleet-pipeline-contract), partner `LoadBalancer` Services and egress IPs are denied. Partners don't have access yet in that window.
-- **Some requested operator actions are withheld.** The features that need them fail with `UnauthorizedOperation`. See [AWS withheld operator actions](#aws-withheld-operator-actions).
-- Custom operator policies are outside Red Hat's tested configuration. The [release check](#release-check) gates every scaffold run, so a release that changes a CredentialsRequest fails the scaffold instead of installing a cluster whose operator lacks an action. Follow the [AWS OCP minor upgrade procedure](#aws-ocp-minor-upgrade-procedure) on every OCP minor upgrade.
-
-#### AWS OCP minor upgrade procedure
-
-1. Scaffold a cluster with the new `--image-set` and read the gap lines.
-2. For each missing action, either grant it in `aws_policies.py` scoped to the cluster, or withhold it: add a `Withheld(reason=..., enable=...)` entry to `INTENTIONALLY_DROPPED` and an entry to [AWS withheld operator actions](#aws-withheld-operator-actions). Repeat until the check passes.
-3. Add the fixtures:
-
-   ```bash
-   oc adm release extract --credentials-requests --cloud=aws --included \
-     --install-config=<install-config.yaml> \
-     --to tests/fixtures/credentialsrequests/aws-<minor> <release image>
-   ```
-
-   `<install-config.yaml>` is the text under `stringData` in `hive/patches/install-config.yaml` of a scaffolded overlay. `tests/unit/test_aws_policies.py` checks coverage against every `aws-*` directory. Keep an older directory while clusters still use that release.
-4. Set `cloudcredential.openshift.io/upgradeable-to` on the spoke.
-
-#### AWS withheld operator actions
-
-These actions appear in the release's CredentialsRequests but are not granted. They are listed in `INTENTIONALLY_DROPPED` in `src/scaffold/providers/aws_policies.py`, where each entry carries a `reason` and an `enable` field. The release check skips them. If the operator calls one, the call fails with `UnauthorizedOperation`.
-
-| Operator (CredentialsRequest) | Action | Since | Feature that fails |
-|---|---|---|---|
-| ingress (`openshift-ingress`) | `sts:AssumeRole` | 4.21 or earlier | Publishing DNS through a shared-VPC `hostedZoneRole` |
-| machine-api (`openshift-machine-api-aws`) | `ec2:AllocateHosts` | 4.22 | MachineSets that place instances on EC2 Dedicated Hosts |
-| machine-api (`openshift-machine-api-aws`) | `ec2:ReleaseHosts` | 4.22 | Same as `ec2:AllocateHosts` |
-| ebs-csi (`aws-ebs-csi-driver-operator`) | `ec2:CopyVolumes` | 5.0 | PVC-to-PVC cloning. Nothing fails on 5.0.1. |
-| ebs-csi (`aws-ebs-csi-driver-operator`) | `ec2:LockSnapshot` | 5.0 | Snapshot locking. Nothing fails on 5.0.1. |
-
-Reason and grant condition for each action:
-
-**`sts:AssumeRole`** (ingress)
-
-- **Why it is withheld:** Fleet clusters do not use a shared VPC.
-- **When and how to grant it:** If clusters move to a shared VPC: grant it on the one `hostedZoneRole` ARN only.
-
-**`ec2:AllocateHosts`** (machine-api)
-
-- **Why it is withheld:** It creates Dedicated Hosts, which are billed per host-hour while allocated and drawn from the account-wide host quota.
-- **When and how to grant it:** When partners need Dedicated Hosts and fleet teardown releases hosts: grant it on `dedicated-host/*` only when the request carries the ownership tag, and add `AllocateHosts` to `TagOnLaunch`'s `ec2:CreateAction`.
-- **Tagging:** machine-api in OCP 4.22.22 and 5.0.1 sends the ownership tag in the `AllocateHosts` request. `buildTagList` in `pkg/actuators/machine/instances.go` of openshift/machine-api-provider-aws adds the Infrastructure resource tags, which hold the install-config `userTags`.
-
-**`ec2:ReleaseHosts`** (machine-api)
-
-- **Why it is withheld:** Only needed together with `ec2:AllocateHosts`.
-- **When and how to grant it:** Together with `ec2:AllocateHosts`: grant it on `dedicated-host/*` owned by the cluster.
-
-**`ec2:CopyVolumes`** (ebs-csi)
-
-- **Effect on 5.0.1:** None. The EBS CSI driver in OCP 5.0.1 (v1.48.0) does not implement volume cloning and does not call this action. Restoring from snapshots works.
-- **Why it is withheld:** The source and the copy are both `volume` resources, and `aws:RequestTag` applies to the whole request. A statement allowing a copy tagged for this cluster therefore also matches a foreign source volume. Any volume in the account could be cloned, attached and read.
-- **When and how to grant it:** Only once a condition provably limits the source to the cluster's own volumes, verified with a real `CopyVolumes` call in a sandbox account. The policy simulator is not enough.
-
-**`ec2:LockSnapshot`** (ebs-csi)
-
-- **Effect on 5.0.1:** None. The EBS CSI driver in OCP 5.0.1 (v1.48.0) does not implement snapshot locking and does not call this action.
-- **Why it is withheld:** After the cooling-off period, no one can remove or shorten a compliance-mode lock, including the account root. Locks last up to 36,500 days. The snapshot blocks teardown and keeps billing until the lock expires or the account is closed.
-- **When and how to grant it:** Only if a condition can restrict locks to governance mode or a short duration, for both `LockDuration` and `ExpirationDate` requests. Scope it to the cluster's own snapshots.
-
-The release check does not report when a later EBS CSI driver starts calling `ec2:CopyVolumes` or `ec2:LockSnapshot`, because the 5.0 CredentialsRequest already lists both. On each OCP upgrade, check whether the driver advertises the CSI `CLONE_VOLUME` capability in `pkg/driver/controller.go`. `oc adm release info <release image> --commits` prints the driver's source repository and commit on the `aws-ebs-csi-driver` line.
-
-#### AWS legacy Mint mode (rollback only)
-
-> [!WARNING]
-> Use `--legacy-mint-credentials` only to roll back while the scoped workflow is validated. The account-admin installer key is stored on the spoke, where a partner with cluster-admin can read it.
-
-`--legacy-mint-credentials` generates the previous Mint-mode overlay: the account-admin installer policy, with the key stored on the spoke. The command prints a warning.
-
-#### Why ccoctl is not used
-
-`ccoctl` is the OpenShift tool that creates the operator IAM roles for an AWS STS cluster from the release's CredentialsRequests. The scaffold renders its own policies and has Crossplane create the IAM resources, for these reasons:
-
-- **The default `ccoctl` policies are account-wide.** `ccoctl aws create-iam-roles` copies each CredentialsRequest statement into the role policy. Every statement in the 4.21 requests has `resource: '*'`. One cluster's machine-api credential could then terminate another cluster's instances, which breaks the isolation rule in [AWS credentials](#aws-credentials-cluster-scoped-default).
-- **Narrowed CredentialsRequests would give the same isolation at a higher cost.** `ccoctl` passes a narrowed `resource` and a `policyCondition` through to the role policy, so it could deliver the policies in `aws_policies.py`. The permissions would be identical. A statement accepts one `resource` string, so each multi-resource statement would have to be split. IAM creation would move from Crossplane reconciliation to a pipeline step that holds IAM and S3 write credentials.
-- **STS changes the credential type and leaves the permissions unchanged.** The roles `ccoctl` creates are assumed with a service account token (`sts:AssumeRoleWithWebIdentity`). A cluster-admin can request a token for any operator service account, so a partner reaches the same policies as with the per-operator IAM users.
-- **STS adds a per-cluster OIDC issuer to protect.** Its key document must be publicly readable. A principal that can replace the document can assume every operator role of that cluster. Teardown must delete the IAM OIDC provider and the roles together with the issuer bucket.
-
-Costs of the current design:
-
-- The operators use long-lived IAM user access keys. STS credentials expire after about an hour. If short-lived credentials become a requirement, Crossplane can create the OIDC provider and the roles with the same scoped policies.
-- The custom policies are outside Red Hat's tested configuration; see [AWS limits and residuals](#aws-limits-and-residuals).
+| Guide | Content | Reader |
+|---|---|---|
+| [docs/aws.md](docs/aws.md) | Scoped credentials, fleet pipeline contract, hub prerequisites, limits and residuals, legacy Mint mode | Engineers who operate the hub and the pipelines |
+| [docs/aws-policy-maintenance.md](docs/aws-policy-maintenance.md) | OCP minor upgrade procedure, withheld operator actions, why `ccoctl` is not used | Maintainers of `aws_policies.py` |
 
 ### Azure
 
 > [!WARNING]
-> Do not use Azure overlays for partner clusters. The installer credentials reach the spoke, where a partner with cluster-admin can change other clusters' DNS records. See [Azure status](#azure-status).
+> Do not use Azure overlays for partner clusters. The installer credentials reach the spoke, where a partner with cluster-admin can change other clusters' DNS records. See [Azure status](docs/azure.md#azure-status).
 
 | Flag                           | Default             | Description                                              |
 |--------------------------------|---------------------|----------------------------------------------------------|
@@ -367,52 +202,7 @@ fleet-scaffold-cluster azure \
   --base-domain-resource-group openshift-dns
 ```
 
-#### Azure status
-
-The scaffold generates Azure overlays, but they must not be used for partner clusters yet:
-
-- **Credentials reach the spoke.** install-config sets no `credentialsMode`, so OpenShift uses passthrough and stores the installer service principal in `kube-system/azure-credentials`. That principal is DNS Zone Contributor on the **shared** `--base-domain` zone. Any partner cluster-admin can rewrite other clusters' `api`/`*.apps` records, or add `_acme-challenge` records to get certificates for them. Its subscription-wide Reader role also exposes every other cluster's resources. This breaks the isolation rule AWS follows (see [AWS credentials](#aws-credentials-cluster-scoped-default)). The fix is the same model: `credentialsMode: Manual`, the installer principal stays on the hub, and per-operator principals scoped to `<name>-rg` and the cluster's own DNS record sets.
-- **The fleet pipeline has no Azure support.** No Azure Crossplane providers on the hub, no RoleAssignment binding, no `azure-credentials` Secret, and no teardown of the Azure managed resources.
-- **fleet-clusters' `cluster-templates/azure` is stale.** Validation now rejects overlays built against it.
-
-#### Azure credential flow
-
-Each cluster gets its own service principal, scoped to its own resource group:
-
-![Azure credential flow: Crossplane creates the ResourceGroup, Application, Principal, Password and paused RoleAssignments. The Password writes the Secret azure-credentials-raw. The Tekton pipeline copies the Principal objectId into the RoleAssignments and builds the Secret azure-credentials, which the Hive ClusterDeployment uses.](docs/diagrams/azure-credential-flow.svg)
-
-Mermaid source: [docs/diagrams/azure-credential-flow.mmd](docs/diagrams/azure-credential-flow.mmd). [docs/diagrams/README.md](docs/diagrams/README.md) describes how to edit the diagram.
-
-| RoleAssignment            | Role                        | Scope                              |
-|---------------------------|-----------------------------|------------------------------------|
-| `<name>-contributor`          | Contributor                 | `<name>-rg`                        |
-| `<name>-user-access-admin`    | User Access Administrator   | `<name>-rg`                        |
-| `<name>-dns-zone-contributor` | DNS Zone Contributor        | `--base-domain` zone in `--base-domain-resource-group` |
-| `<name>-reader`               | Reader                      | Subscription (installer validation, read-only) |
-
-The installer installs into the pre-created, empty `<name>-rg` (`platform.azure.resourceGroupName`).
-
-**The fleet Tekton pipeline must complete two steps** (Crossplane cannot do them with plain managed resources, because `provider-azure` RoleAssignments cannot reference a `provider-azuread` Principal):
-
-1. For each `RoleAssignment` in the cluster namespace: set `spec.forProvider.principalId` to the Principal's `status.atProvider.objectId` and remove the `crossplane.io/paused` annotation.
-2. Build Secret `azure-credentials` with key `osServicePrincipal.json`:
-   ```json
-   {
-     "subscriptionId": "<--subscription-id>",
-     "clientId": "<Application status.atProvider.clientId>",
-     "clientSecret": "<azure-credentials-raw key attribute.value>",
-     "tenantId": "<Principal status.atProvider.applicationTenantId>"
-   }
-   ```
-
-If the overlays are synced by a GitOps tool, exclude `spec.forProvider.principalId` and the paused annotation on RoleAssignments from drift detection, or the sync will revert step 1.
-
-#### Azure hub prerequisites
-
-- Crossplane providers `provider-azure-azure`, `provider-azure-authorization`, and `provider-azuread`, each with a `ProviderConfig` named `default`
-- The provider identity needs Entra permission to create app registrations (e.g. `Application.ReadWrite.OwnedBy`) and Owner (or Contributor + User Access Administrator) on the subscription
-- A public Azure DNS zone for `--base-domain` in `--base-domain-resource-group`
-- Regional vCPU quota for the chosen VM family
+[docs/azure.md](docs/azure.md) covers the Azure status, the credential flow and the hub prerequisites, for engineers who evaluate or extend Azure support.
 
 ## Generated output
 
@@ -472,9 +262,9 @@ For AWS clusters with scoped credentials (the default) the scaffold verifies the
 
 1. The release image is derived from `--image-set` by naming convention: `img<version>-x86-64-appsub` maps to `quay.io/openshift-release-dev/ocp-release:<version>-x86_64`. The scaffold does not read the hub's ClusterImageSet, so when `spec.releaseImage` differs from the convention pass `--release-image PULLSPEC`. An image-set name outside the convention fails the check.
 2. `oc adm release extract --credentials-requests --cloud=aws --included --install-config=<rendered install-config>` extracts the CredentialsRequests the installer would apply for this cluster. The repository is public; no pull secret is used. This takes about 20 seconds; the log announces it with `-> release check:` followed by `-> -> extracting CredentialsRequests from <image>` and `-> -> (oc adm release extract, up to 300s)`, and prints nothing else until `oc` returns.
-3. The requests are compared with `COMPONENTS` and the rendered policies: every AWS CredentialsRequest needs a scoped policy, every `COMPONENTS` entry must exist in the release, each operator's target Secret (namespace and name) must match, and every requested action must be granted (IAM wildcards in the policy match; actions in `INTENTIONALLY_DROPPED` are skipped, see [AWS withheld operator actions](#aws-withheld-operator-actions)).
+3. The requests are compared with `COMPONENTS` and the rendered policies: every AWS CredentialsRequest needs a scoped policy, every `COMPONENTS` entry must exist in the release, each operator's target Secret (namespace and name) must match, and every requested action must be granted (IAM wildcards in the policy match; actions in `INTENTIONALLY_DROPPED` are skipped, see [AWS withheld operator actions](docs/aws-policy-maintenance.md#aws-withheld-operator-actions)).
 
-On success the log shows `-> -> Release check: <n> CredentialsRequests from <source> covered by the scoped policies.` followed by `-> -> Cluster '<name>' scaffolded successfully`. On any difference the command exits `1` with one line per gap, for example `ebs-csi lacks ec2:DescribeVolumeStatus`. The overlay has already been written at that point; fix `aws_policies.py`, refresh the fixtures (see [AWS OCP minor upgrade procedure](#aws-ocp-minor-upgrade-procedure)) and regenerate the overlay with `--force`.
+On success the log shows `-> -> Release check: <n> CredentialsRequests from <source> covered by the scoped policies.` followed by `-> -> Cluster '<name>' scaffolded successfully`. On any difference the command exits `1` with one line per gap, for example `ebs-csi lacks ec2:DescribeVolumeStatus`. The overlay has already been written at that point; fix `aws_policies.py`, refresh the fixtures (see [AWS OCP minor upgrade procedure](docs/aws-policy-maintenance.md#aws-ocp-minor-upgrade-procedure)) and regenerate the overlay with `--force`.
 
 Flags:
 - `--release-image PULLSPEC`: check against this release instead of the one derived from `--image-set`.
