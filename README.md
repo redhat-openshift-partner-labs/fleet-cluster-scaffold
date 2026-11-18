@@ -5,7 +5,7 @@
 [![AWS](https://img.shields.io/badge/AWS-supported-232F3E?logo=amazonwebservices&logoColor=white)](#aws)
 [![Azure](https://img.shields.io/badge/Azure-not%20ready-0078D4?logo=microsoftazure&logoColor=white)](#azure-status)
 
-Standalone CLI tool for scaffolding OpenShift cluster overlay directories with Kustomize. Generates all the Hive and Crossplane resources needed to provision a cluster on AWS or Azure, without depending on the fleet monorepo.
+`fleet-cluster-scaffold` is a command-line tool that generates the Kustomize overlay directory for one OpenShift cluster on AWS or Azure, for engineers who provision clusters through the fleet pipelines. The overlay holds the Hive and Crossplane resources for the cluster. The tool runs without the fleet monorepo.
 
 ## Contents
 
@@ -22,11 +22,11 @@ Standalone CLI tool for scaffolding OpenShift cluster overlay directories with K
 
 Given a cloud, cluster name, region, and tier, `fleet-scaffold-cluster` generates a complete Kustomize overlay directory containing:
 
-- **Hive resources** -- ClusterDeployment, MachinePool, ManagedCluster, KlusterletAddonConfig, install-config Secret, and Namespace patches
-- **Crossplane resources** -- per-cluster cloud credentials
+- **Hive resources:** ClusterDeployment, MachinePool, ManagedCluster, KlusterletAddonConfig, install-config Secret, and Namespace patches
+- **Crossplane resources:** per-cluster cloud credentials
   - AWS: installer IAM user, cluster-scoped IAM users for each OpenShift operator, and BYO node roles
   - Azure: ResourceGroup, Entra Application, ServicePrincipal, client secret, and RoleAssignments
-- **Cluster metadata** -- `platform` and cloud-specific keys read by the fleet pipelines, plus optional values such as the htpasswd identity provider name
+- **Cluster metadata:** `platform` and cloud-specific keys read by the fleet pipelines, plus optional values such as the htpasswd identity provider name
 
 Each overlay references shared base resources in `cluster-templates/<cloud>/<topology>/` via relative paths, so clusters stay lightweight while sharing common definitions.
 
@@ -84,7 +84,7 @@ For AWS clusters with scoped credentials (the default) the scaffold then verifie
 
 ### Command syntax
 
-```
+```text
 fleet-scaffold-cluster CLOUD --name NAME --region REGION --tier TIER [options]
 fleet-scaffold-cluster --version
 ```
@@ -95,7 +95,7 @@ Run `fleet-scaffold-cluster CLOUD --help` for the full flag list of a cloud. `--
 
 | Flag                       | Default                      | Description                                                  |
 |----------------------------|------------------------------|--------------------------------------------------------------|
-| `--name`                   | *(required)*                 | Cluster name (valid DNS-1123 label: lowercase alphanumeric and hyphens, 1-63 chars) |
+| `--name`                   | *(required)*                 | Cluster name (valid DNS-1123 label: lowercase alphanumeric and hyphens, 1-63 chars; at most 49 for AWS scoped credentials) |
 | `--region`                 | *(required)*                 | Cloud region (e.g. `us-east-1`, `eastus2`)                   |
 | `--tier`                   | *(required)*                 | Cluster tier: `base`, `virt`, `ai`                           |
 | `--topology`               | `standard`                   | `standard`, `compact`, or `sno`; selects `cluster-templates/<cloud>/<topology>` |
@@ -149,7 +149,7 @@ Partners get cluster-admin, and all clusters share one AWS account. So no creden
 
 - **`credentialsMode: Manual`**: the installer key is never copied to the spoke (no `kube-system/aws-creds`).
 - **Ownership tag** `openshiftpartnerlabs.com/cluster=<name>`, set via install-config `userTags` and `propagateUserTags`, so the installer and the operators tag what they create.
-- **One IAM user per OpenShift operator** (machine-api, image-registry, ingress, ebs-csi, cloud-network-config-controller, cloud-credential-operator read-only). Each policy is derived from the OCP 4.20/4.21 CredentialsRequests and limited to the cluster:
+- **One IAM user per OpenShift operator** (machine-api, image-registry, ingress, ebs-csi, cloud-network-config-controller, cloud-credential-operator read-only). Each policy is derived from the operator's CredentialsRequest, is checked against the OCP 4.21 and 5.0 requests in `tests/fixtures/credentialsrequests/`, and is limited to the cluster:
   - instances by the cluster's exact instance profiles `<infraID>-{master,worker}-profile`;
   - volumes, snapshots, security groups and load balancers by the ownership tag (settable only at create time);
   - instance launches only from snapshots owned by another account (the RHCOS AMI's, owned by Red Hat), never from this account's snapshots, which hold other clusters' PV and VM data;
@@ -200,6 +200,7 @@ The hub's Crossplane AWS identity (`crossplane-system/aws-credentials`, Provider
 | Post-install policy updates (`scope-aws-credentials` changes the operator policies; Crossplane applies that as a new policy version and prunes old ones) | `iam:CreatePolicyVersion`, `iam:DeletePolicyVersion`, `iam:ListPolicyVersions`, `iam:GetPolicyVersion` |
 
 Check before provisioning. The output should be empty:
+
 ```bash
 aws iam simulate-principal-policy --policy-source-arn <hub-crossplane-identity-arn> \
   --action-names iam:CreateRole iam:GetRole iam:DeleteRole iam:UpdateRole iam:UpdateAssumeRolePolicy \
