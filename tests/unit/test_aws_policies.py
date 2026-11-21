@@ -10,7 +10,7 @@ import pytest
 from scaffold.providers import aws_policies as pol
 from scaffold.release import CredentialsRequest, load_credentials_requests
 
-NAME, REGION, DOMAIN = "10f25620-vscopeocpv", "us-east-2", "openshiftpartnerlabs.com"
+NAME, REGION, DOMAIN = "0a1b2c3d-partnerlab", "us-east-2", "openshiftpartnerlabs.com"
 PREFIX = pol.infra_prefix(NAME)
 FIXTURES_ROOT = pathlib.Path(__file__).parent.parent / "fixtures" / "credentialsrequests"
 FIXTURES = FIXTURES_ROOT / "aws-4.21"  # base for the drift tests in TestCoverageGaps
@@ -54,7 +54,7 @@ def _spoke_policies() -> dict[str, dict]:
 
 class TestInfraPrefix:
     @pytest.mark.parametrize("name,expected", [
-        ("10f25620-vscopeocpv", "10f25620-vscopeocpv"),
+        ("0a1b2c3d-partnerlab", "0a1b2c3d-partnerlab"),
         ("a" * 30, "a" * 21),
         ("abcdefghijklmnopqrst-uvw", "abcdefghijklmnopqrst"),  # cut lands on '-', trimmed
         ("a--b", "a-b"),
