@@ -63,9 +63,9 @@ class TestInfraPrefix:
         assert pol.infra_prefix(name) == expected
 
     def test_infra_id_pattern_matches_only_own_infra_id(self):
-        pattern = pol.infra_id_pattern("0171d46a-scopedaws")
-        assert fnmatch.fnmatchcase("0171d46a-scopedaws-fz9mx", pattern)  # infra ID of a live install
-        assert not fnmatch.fnmatchcase("0171d46a-scopedaws-2-fz9mx", pattern)  # sibling 0171d46a-scopedaws-2
+        pattern = pol.infra_id_pattern("4e5f6a7b-scopedlab")
+        assert fnmatch.fnmatchcase("4e5f6a7b-scopedlab-x7k2q", pattern)  # name plus the installer's 5-character suffix
+        assert not fnmatch.fnmatchcase("4e5f6a7b-scopedlab-2-x7k2q", pattern)  # sibling 4e5f6a7b-scopedlab-2
 
 
 @pytest.mark.parametrize("release", RELEASES)
@@ -238,9 +238,9 @@ class TestSpokeInvariants:
         st = _statements(pol.component_policy("image-registry", NAME, REGION, DOMAIN))[0]
         bucket = f"arn:aws:s3:::{PREFIX}-?????-image-registry-*"
         assert st["Resource"] == [bucket, f"{bucket}/*"]
-        # bucket name from a live 4.21 install
-        assert fnmatch.fnmatchcase("arn:aws:s3:::0171d46a-scopedaws-fz9mx-image-registry-us-east-2-jvualcppxoun",
-                                   bucket.replace(PREFIX, pol.infra_prefix("0171d46a-scopedaws")))
+        # bucket name in the format of a 4.21 install
+        assert fnmatch.fnmatchcase("arn:aws:s3:::4e5f6a7b-scopedlab-x7k2q-image-registry-us-east-2-abcdefghijkl",
+                                   bucket.replace(PREFIX, pol.infra_prefix("4e5f6a7b-scopedlab")))
 
     def test_route53_limited_to_cluster_apps_records(self):
         doc = pol.component_policy("ingress", NAME, REGION, DOMAIN)
